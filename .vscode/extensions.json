@@ -1,0 +1,12 @@
+{
+    // Recommended extensions for working in this repo (VS Code prompts to install these).
+    "recommendations": [
+        "rust-lang.rust-analyzer",
+        "rvben.rumdl",
+        "hverlin.mise-vscode",
+        "pkl.pkl-vscode",
+        "redhat.vscode-yaml",
+        "tombi-toml.tombi",
+        "github.vscode-github-actions"
+    ]
+}

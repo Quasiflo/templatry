@@ -1,0 +1,49 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:best-practices",
+    ":semanticCommits",
+    "mergeConfidence:all-badges",
+    ":disableRateLimiting",
+    ":enableVulnerabilityAlertsWithAdditionalLabel(security)"
+  ],
+  "dependencyDashboardOSVVulnerabilitySummary": "all",
+  "osvVulnerabilityAlerts": true,
+  "internalChecksFilter": "strict",
+  "labels": [
+    "Chore 🧹"
+  ],
+  "lockFileMaintenance": {
+    "enabled": false,
+  },
+  "packageRules": [
+    {
+      "groupName": "{{manager}} Dependencies", // Group deps by manager
+      "matchManagers": [
+        "*"
+      ]
+    },
+    {
+      "matchUpdateTypes": [
+        "major",
+        "minor",
+        "patch",
+        "pin",
+        "pinDigest",
+        "digest",
+        "bump",
+        "replacement"
+      ],
+      "minimumReleaseAge": "4 days"
+    },
+    {
+      "groupName": "Mise Dependencies",
+      "matchManagers": [
+        "mise"
+      ],
+      "versioning": "semver-partial"
+    },
+  ],
+  "prCreation": "immediate",
+  "rebaseWhen": "behind-base-branch"
+}

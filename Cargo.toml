@@ -1,0 +1,14 @@
+[package]
+name = "templatry"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "templatry"
+path = "src/lib.rs"
+
+[[bin]]
+name = "templatry"
+path = "src/main.rs"
+
+[dependencies]
