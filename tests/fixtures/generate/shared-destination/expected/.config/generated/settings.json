@@ -1,0 +1,9 @@
+{
+  "dart": true,
+  "editor": {
+    "size": 14,
+    "tabSize": 2,
+    "theme": "dark"
+  },
+  "rust": true
+}

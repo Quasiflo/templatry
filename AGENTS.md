@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Rust CLI + library, Milestones 0–2 done. `validate` resolves all four source kinds (remotes fetched through the content-addressed cache); `cache clear` works; `generate` still returns `unimplemented` (see `ROADMAP.md`).
+Rust CLI + library, Milestones 0–3 done. `validate` resolves all four source kinds (remotes fetched through the content-addressed cache); `generate` (with `--check`/`--dry-run`), `validate`, and `cache clear` work; `--watch` still returns `unimplemented` (see `ROADMAP.md`).
 
 ## Toolchain
 
@@ -20,7 +20,7 @@ Rust CLI + library, Milestones 0–2 done. `validate` resolves all four source k
 cargo build
 cargo test
 cargo test <substring>      # single / focused test
-cargo clippy --all-targets -- -D warnings
+cargo clippy --all-targets -- -D warnings  # hk's clippy step skips test targets; run this manually
 cargo fmt --check
 hk check                    # pre-commit gate: rumdl + zizmor + cargo clippy/fmt/deny
 ```

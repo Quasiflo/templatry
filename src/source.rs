@@ -49,23 +49,25 @@ pub struct ResolvedSource {
 
 /// Resolve a source reference against the cache, fetching on miss.
 ///
-/// Local directories resolve in place with no caching. Remote kinds hit the
-/// cache by source-id hash first; on miss they fetch (unless `offline`, which
-/// fails naming the missing source), extract into the entry, and record the
-/// sidecar. Stale entries are pruned on every call. The returned `root_dir`
-/// is guaranteed to hold `templatry.source.toml`.
+/// `project_root` is the repository root (see [`crate::config::project_root`]):
+/// local `path` sources resolve against it. Local directories resolve in
+/// place with no caching. Remote kinds hit the cache by source-id hash first;
+/// on miss they fetch (unless `offline`, which fails naming the missing
+/// source), extract into the entry, and record the sidecar. Stale entries are
+/// pruned on every call. The returned `root_dir` is guaranteed to hold
+/// `templatry.source.toml`.
 pub async fn resolve(
     source: &SourceRef,
-    project_dir: &Path,
+    project_root: &Path,
     offline: bool,
 ) -> crate::Result<ResolvedSource> {
-    resolve_in(source, project_dir, offline, &cache_root()).await
+    resolve_in(source, project_root, offline, &cache_root()).await
 }
 
 /// [`resolve`] with an explicit cache root (the test seam).
 pub(crate) async fn resolve_in(
     source: &SourceRef,
-    project_dir: &Path,
+    project_root: &Path,
     offline: bool,
     cache_root: &Path,
 ) -> crate::Result<ResolvedSource> {
@@ -75,9 +77,9 @@ pub(crate) async fn resolve_in(
 
     if kind == SourceKind::LocalDir {
         let local = source.path.as_deref().expect("kind() guarantees `path`");
-        let base = project_dir.join(local).canonicalize().map_err(|err| {
+        let base = project_root.join(local).canonicalize().map_err(|err| {
             crate::invalid(
-                project_dir,
+                project_root,
                 format!("source directory `{local}` cannot be resolved: {err}"),
             )
         })?;
@@ -107,7 +109,7 @@ pub(crate) async fn resolve_in(
     }
     if offline {
         return Err(crate::invalid(
-            project_dir,
+            project_root,
             format!(
                 "no cached {kind} source for this configuration and `--offline` was given: re-run without `--offline` to fetch it"
             ),

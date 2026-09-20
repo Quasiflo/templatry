@@ -1,0 +1,5 @@
+*.log
+target/
+
+# local
+secret.env

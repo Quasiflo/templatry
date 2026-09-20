@@ -1,0 +1,17 @@
+[templates.a]
+template = "a.json"
+labels = ["rust"]
+
+[templates.b]
+template = "b.json"
+labels = ["dart"]
+
+[templates.c]
+template = "c.json"
+labels = ["rust", "dart"]
+
+[templates.d]
+template = "d.json"
+
+[default]
+exclude_labels = ["dart"]

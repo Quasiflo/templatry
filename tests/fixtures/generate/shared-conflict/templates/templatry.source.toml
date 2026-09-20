@@ -1,0 +1,9 @@
+[templates.rust-settings]
+template = "rust-settings.json"
+generated_file = "settings.json"
+labels = ["rust"]
+
+[templates.dart-settings]
+template = "dart-settings.json"
+generated_file = "settings.json"
+labels = ["dart"]

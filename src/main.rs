@@ -42,7 +42,7 @@ enum Commands {
         #[arg(long, conflicts_with = "watch")]
         check: bool,
         /// Print planned writes without touching disk.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "check")]
         dry_run: bool,
         /// Use a project config other than `.config/templatry.toml`.
         #[arg(long, value_name = "PATH")]
@@ -84,8 +84,12 @@ async fn run(cli: Cli) -> miette::Result<()> {
                 watch: cli.watch,
                 ..Default::default()
             };
-            templatry::generate::run(&options)?;
-            Ok(())
+            match templatry::generate::run(&options).await {
+                Ok(()) => Ok(()),
+                // The differing paths are already printed; CI only needs the code.
+                Err(templatry::Error::CheckDifferences { .. }) => std::process::exit(2),
+                Err(other) => Err(other.into()),
+            }
         }
         Some(Commands::Generate {
             watch,
@@ -102,8 +106,12 @@ async fn run(cli: Cli) -> miette::Result<()> {
                 config,
                 offline,
             };
-            templatry::generate::run(&options)?;
-            Ok(())
+            match templatry::generate::run(&options).await {
+                Ok(()) => Ok(()),
+                // The differing paths are already printed; CI only needs the code.
+                Err(templatry::Error::CheckDifferences { .. }) => std::process::exit(2),
+                Err(other) => Err(other.into()),
+            }
         }
         Some(Commands::Validate { config }) => {
             reject_bare_watch_flag(cli.watch)?;

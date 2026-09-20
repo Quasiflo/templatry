@@ -1,0 +1,17 @@
+[templates.ignored]
+template = "template.gitignore"
+generated_file = ".gitignore"
+generated_dir = ""
+
+[templates.banner]
+template = "banner.txt"
+strategy = "append_top"
+generated_dir = ""
+
+[templates.tool]
+template = "tool.toml"
+
+[templates.envfile]
+template = "base.env"
+strategy = "replace"
+generated_dir = ""

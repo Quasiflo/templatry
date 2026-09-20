@@ -4,13 +4,31 @@
 //! File loading and source/project context detection live in [`crate::validate`].
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 /// Project configuration path, relative to the project repository root.
 pub const PROJECT_CONFIG_PATH: &str = ".config/templatry.toml";
 
 /// Source configuration filename, relative to the source root (or `root` subtree).
 pub const SOURCE_CONFIG_FILENAME: &str = "templatry.source.toml";
+
+/// Repository root for a project config path.
+///
+/// All project-relative paths (`path`, override dirs, generated dirs) resolve
+/// against this: the grandparent when the file lives in a `.config/`
+/// directory (the canonical `.config/templatry.toml` layout), else the
+/// config file's own parent directory.
+pub fn project_root(config_path: &Path) -> PathBuf {
+    let parent = config_path.parent().unwrap_or_else(|| Path::new("."));
+    if parent.file_name().is_some_and(|name| name == ".config") {
+        parent
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| parent.to_path_buf())
+    } else {
+        parent.to_path_buf()
+    }
+}
 
 // ---- Project config (`templatry.toml`) -------------------------------------
 
@@ -425,6 +443,13 @@ impl Template {
             .clone()
             .unwrap_or_else(|| configs.default_generated_dir.clone())
     }
+
+    /// Override directory: explicit value or `default_override_dir`.
+    pub fn resolved_override_dir(&self, configs: &Configs) -> String {
+        self.override_dir
+            .clone()
+            .unwrap_or_else(|| configs.default_override_dir.clone())
+    }
 }
 
 /// Final segment of a template path, if it names a file.
@@ -464,6 +489,7 @@ impl SourceFile {
     }
 
     /// `replace` cannot combine: flag shared destinations involving it.
+    /// Structured and text strategies cannot combine either.
     fn validate_shared_destinations(&self, display_path: &Path) -> crate::Result<()> {
         let mut groups: BTreeMap<(String, String), Vec<&str>> = BTreeMap::new();
         for (name, template) in &self.templates {
@@ -474,15 +500,34 @@ impl SourceFile {
             groups.entry(key).or_default().push(name.as_str());
         }
         for ((dir, file), names) in &groups {
-            if names.len() > 1
-                && names
-                    .iter()
-                    .any(|name| self.templates[*name].strategy == Some(Strategy::Replace))
+            if names.len() < 2 {
+                continue;
+            }
+            if names
+                .iter()
+                .any(|name| self.templates[*name].strategy == Some(Strategy::Replace))
             {
                 return Err(crate::invalid(
                     display_path,
                     format!(
                         "templates {} all target `{dir}/{file}`, but `replace` emits one override verbatim and cannot combine: give them distinct destinations or drop `replace`",
+                        names.join("`, `")
+                    ),
+                ));
+            }
+            let mut families = BTreeSet::new();
+            for name in names {
+                let template = &self.templates[*name];
+                families.insert(crate::merge::family_of(
+                    template,
+                    &template.resolved_generated_file()?,
+                )?);
+            }
+            if families.len() > 1 {
+                return Err(crate::invalid(
+                    display_path,
+                    format!(
+                        "templates {} all target `{dir}/{file}`, but mix structured merges with text strategies: align them to one family",
                         names.join("`, `")
                     ),
                 ));

@@ -52,7 +52,7 @@ pub async fn run_in(dir: &Path, config: Option<&Path>) -> crate::Result<()> {
 
 /// Parse and validate a `templatry.source.toml` file.
 fn validate_source_file(path: &Path) -> crate::Result<()> {
-    let content = read_file(path)?;
+    let content = crate::read_file(path)?;
     let source: SourceFile = crate::parse_toml(path, &content)?;
     let source_dir = path.parent().unwrap_or_else(|| Path::new("."));
     source.validate(source_dir, path)
@@ -62,15 +62,12 @@ fn validate_source_file(path: &Path) -> crate::Result<()> {
 ///
 /// Remote sources are fetched through the cache first (see [`crate::source`]).
 async fn validate_project_file(path: &Path) -> crate::Result<()> {
-    let content = read_file(path)?;
+    let content = crate::read_file(path)?;
     let project: ProjectConfig = crate::parse_toml(path, &content)?;
-    let project_dir = path
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| Path::new(".").to_path_buf());
-    let resolved = crate::source::resolve(&project.source, &project_dir, false).await?;
+    let project_root = crate::config::project_root(path);
+    let resolved = crate::source::resolve(&project.source, &project_root, false).await?;
     let source_file = resolved.root_dir.join(SOURCE_CONFIG_FILENAME);
-    let content = read_file(&source_file)?;
+    let content = crate::read_file(&source_file)?;
     let source: SourceFile = crate::parse_toml(&source_file, &content)?;
     source.validate(&resolved.root_dir, &source_file)?;
     // Resolving also rejects unknown project labels against the source label set.
@@ -80,10 +77,4 @@ async fn validate_project_file(path: &Path) -> crate::Result<()> {
         &project.source.disable_labels,
     )?;
     Ok(())
-}
-
-/// Read a config file, mapping IO failures to diagnostics.
-fn read_file(path: &Path) -> crate::Result<String> {
-    std::fs::read_to_string(path)
-        .map_err(|err| crate::invalid(path, format!("cannot read file: {err}")))
 }

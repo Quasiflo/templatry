@@ -1,0 +1,9 @@
+{
+  "editor": {
+    "size": 14,
+    "font": "JetBrains Mono",
+    "drop": true
+  },
+  "files": ["a", "b"],
+  "old": 1
+}

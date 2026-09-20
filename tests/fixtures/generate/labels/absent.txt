@@ -1,0 +1,3 @@
+# disabled by label resolution: must not be generated
+.config/generated/a.json
+.config/generated/c.json

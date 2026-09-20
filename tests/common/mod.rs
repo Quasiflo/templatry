@@ -36,9 +36,6 @@ pub fn cases(suite: &str) -> Vec<PathBuf> {
 }
 
 /// Compare `actual` bytes against the golden file, or bless it with `BLESS=1`.
-///
-/// Unused until the first gold-file suite lands (Milestone 3).
-#[allow(dead_code)]
 #[track_caller]
 pub fn assert_golden(actual: &[u8], golden_path: &Path) {
     if std::env::var_os("BLESS").is_some() {
@@ -60,4 +57,89 @@ pub fn assert_golden(actual: &[u8], golden_path: &Path) {
         "golden mismatch: {}",
         golden_path.display()
     );
+}
+
+/// Copy a fixture case to a fresh tempdir for generation tests.
+///
+/// Returns the tempdir (keep it alive) plus the case root. Fixture-local
+/// relative paths (e.g. `path = "../templates"`) keep working after the copy.
+pub fn setup_case(suite: &str, case: &str) -> (tempfile::TempDir, PathBuf) {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join(case);
+    copy_dir(&fixtures_root().join(suite).join(case), &root);
+    (temp, root)
+}
+
+/// Recursive directory copy (files and directories).
+pub fn copy_dir(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).expect("create case dir");
+    let entries = std::fs::read_dir(from).expect("read fixture dir");
+    for entry in entries {
+        let entry = entry.expect("dir entry");
+        let source = entry.path();
+        let dest = to.join(entry.file_name());
+        if source.is_dir() {
+            copy_dir(&source, &dest);
+        } else {
+            std::fs::copy(&source, &dest).expect("copy fixture file");
+        }
+    }
+}
+
+/// Assert every file under `expected/` matches the same relative path under `root`.
+#[track_caller]
+pub fn assert_tree_matches(root: &Path, expected: &Path) {
+    let mut compared = 0;
+    assert_tree_matches_inner(root, expected, expected, &mut compared);
+    assert!(compared > 0, "no golden files under {}", expected.display());
+}
+
+fn assert_tree_matches_inner(
+    root: &Path,
+    expected_root: &Path,
+    current: &Path,
+    compared: &mut usize,
+) {
+    let entries = std::fs::read_dir(current).expect("read expected dir");
+    for entry in entries {
+        let entry = entry.expect("dir entry");
+        let path = entry.path();
+        if path.is_dir() {
+            assert_tree_matches_inner(root, expected_root, &path, compared);
+            continue;
+        }
+        let relative = path
+            .strip_prefix(expected_root)
+            .expect("expected-relative path");
+        let actual = std::fs::read(root.join(relative)).unwrap_or_else(|_| {
+            panic!("missing generated file: {}", relative.display());
+        });
+        let wanted = std::fs::read(&path).expect("read golden file");
+        assert_eq!(
+            actual,
+            wanted,
+            "mismatch in generated file: {}",
+            relative.display()
+        );
+        *compared += 1;
+    }
+}
+
+/// Assert relative paths listed in `<case>/absent.txt` were not generated.
+///
+/// The list file is optional; blank lines and `#` comments are skipped.
+#[track_caller]
+pub fn assert_absent(root: &Path, case_source: &Path) {
+    let list = case_source.join("absent.txt");
+    if !list.is_file() {
+        return;
+    }
+    let content = std::fs::read_to_string(&list).expect("read absent.txt");
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        assert!(!root.join(line).exists(), "file should be absent: {line}");
+    }
 }

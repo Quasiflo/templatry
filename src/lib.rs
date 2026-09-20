@@ -52,6 +52,17 @@ pub enum Error {
         /// What is wrong, with one suggested fix.
         message: String,
     },
+
+    /// `generate --check` found differences between generated output and disk.
+    ///
+    /// The differing paths are printed during the check; the binary maps this
+    /// to exit code 2 for CI consumption.
+    #[error("generated output differs in {count} file(s)")]
+    #[diagnostic(code(templatry::check::diff))]
+    CheckDifferences {
+        /// Number of differing files (already printed).
+        count: usize,
+    },
 }
 
 impl Error {
@@ -99,6 +110,16 @@ fn line_column(content: &str, offset: usize) -> (usize, usize) {
         .map(|fragment| fragment.chars().count() + 1)
         .unwrap_or(1);
     (line, column)
+}
+
+/// Read a config file as text, mapping IO failures to diagnostics.
+pub(crate) fn read_file(path: &Path) -> Result<String> {
+    std::fs::read_to_string(path).map_err(|err| invalid(path, format!("cannot read file: {err}")))
+}
+
+/// Read a file as bytes, mapping IO failures to diagnostics.
+pub(crate) fn read_file_bytes(path: &Path) -> Result<Vec<u8>> {
+    std::fs::read(path).map_err(|err| invalid(path, format!("cannot read file: {err}")))
 }
 
 pub mod config;

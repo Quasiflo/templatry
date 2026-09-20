@@ -1,0 +1,4 @@
+[source]
+path = "templates"
+enable_labels = ["dart"]
+disable_labels = ["rust"]

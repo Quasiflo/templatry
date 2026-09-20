@@ -4,6 +4,8 @@
 //! The inventory test below locks the case list so new behavior always arrives
 //! with a fixture.
 
+// Shared harness: each suite uses a different subset of helpers.
+#[allow(dead_code)]
 mod common;
 
 use std::path::PathBuf;

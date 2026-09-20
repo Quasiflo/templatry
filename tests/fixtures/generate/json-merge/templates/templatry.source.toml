@@ -1,0 +1,7 @@
+[templates.editor]
+template = "settings.json"
+labels = ["rust"]
+
+[templates.plain]
+template = "plain.json"
+labels = ["rust"]

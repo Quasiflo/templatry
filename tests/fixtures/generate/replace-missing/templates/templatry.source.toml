@@ -1,0 +1,4 @@
+[templates.envfile]
+template = "base.env"
+strategy = "replace"
+generated_dir = ""
