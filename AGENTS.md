@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Rust CLI + library, Milestone 0 scaffolded. `src/` has `lib.rs`/`main.rs` plus stub modules — every verb returns `unimplemented` until its milestone lands (see `ROADMAP.md`).
+Rust CLI + library, Milestones 0–1 done. `validate` is fully working (local sources end-to-end; remote kinds validate structurally and stop at the Milestone 2 firewall); `generate`/`cache` still return `unimplemented` (see `ROADMAP.md`).
 
 ## Toolchain
 

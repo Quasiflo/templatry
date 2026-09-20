@@ -1,0 +1,7 @@
+[templates.rust-settings]
+template = "templates/settings.json"
+labels = ["rust"]
+
+[templates.dart-settings]
+template = "templates/settings.json"
+labels = ["dart"]

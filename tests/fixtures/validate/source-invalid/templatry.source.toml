@@ -1,0 +1,6 @@
+[templates.a]
+template = "a.json"
+
+[default]
+include_labels = ["x"]
+exclude_labels = ["y"]

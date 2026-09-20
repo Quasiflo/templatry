@@ -1,0 +1,4 @@
+[source]
+github = "org/repo"
+ref = "v1.0.0"
+asset = "configs_*.zip"
