@@ -30,7 +30,6 @@ fn all_validate_fixtures_are_known() {
         [
             "project-both-present",
             "project-empty",
-            "project-remote-github",
             "project-valid-local",
             "source-invalid",
             "source-valid",
@@ -38,40 +37,40 @@ fn all_validate_fixtures_are_known() {
     );
 }
 
-#[test]
-fn valid_source_config_passes() {
-    validate::run_in(&fixture("source-valid"), None).expect("valid source config");
+#[tokio::test]
+async fn valid_source_config_passes() {
+    validate::run_in(&fixture("source-valid"), None)
+        .await
+        .expect("valid source config");
 }
 
-#[test]
-fn invalid_source_config_fails() {
-    let err = validate::run_in(&fixture("source-invalid"), None).expect_err("mutex violation");
+#[tokio::test]
+async fn invalid_source_config_fails() {
+    let err = validate::run_in(&fixture("source-invalid"), None)
+        .await
+        .expect_err("mutex violation");
     assert!(err.to_string().contains("sets both"), "{err:?}");
 }
 
-#[test]
-fn valid_local_project_passes() {
-    validate::run_in(&fixture("project-valid-local"), None).expect("valid local project");
+#[tokio::test]
+async fn valid_local_project_passes() {
+    validate::run_in(&fixture("project-valid-local"), None)
+        .await
+        .expect("valid local project");
 }
 
-#[test]
-fn both_configs_present_fails() {
-    let err = validate::run_in(&fixture("project-both-present"), None).expect_err("ambiguity");
+#[tokio::test]
+async fn both_configs_present_fails() {
+    let err = validate::run_in(&fixture("project-both-present"), None)
+        .await
+        .expect_err("ambiguity");
     assert!(err.to_string().contains("both"), "{err:?}");
 }
 
-#[test]
-fn missing_configs_fails() {
-    let err = validate::run_in(&fixture("project-empty"), None).expect_err("no config");
+#[tokio::test]
+async fn missing_configs_fails() {
+    let err = validate::run_in(&fixture("project-empty"), None)
+        .await
+        .expect_err("no config");
     assert!(err.to_string().contains("neither"), "{err:?}");
-}
-
-#[test]
-fn remote_source_is_milestone_2() {
-    let err = validate::run_in(&fixture("project-remote-github"), None).expect_err("remote fetch");
-    assert!(
-        matches!(err, templatry::Error::Unimplemented(_)),
-        "expected unimplemented firewall, got {err:?}"
-    );
-    assert!(err.to_string().contains("Milestone 2"), "{err:?}");
 }

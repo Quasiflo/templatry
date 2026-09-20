@@ -11,7 +11,7 @@
 
 use std::path::Path;
 
-use miette::{Diagnostic, NamedSource, SourceSpan};
+use miette::Diagnostic;
 
 /// Shared result type for fallible templatry operations.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -39,14 +39,8 @@ pub enum Error {
     Parse {
         /// File that failed to parse.
         path: String,
-        /// Parser message.
+        /// Parser message, with line/column when the parser reports a span.
         message: String,
-        /// File contents for span rendering.
-        #[source_code]
-        src: NamedSource<String>,
-        /// Offending span, when the parser reports one.
-        #[label("here")]
-        span: Option<SourceSpan>,
     },
 
     /// A config file that parses but violates schema or consistency rules.
@@ -75,22 +69,36 @@ pub(crate) fn invalid(path: &Path, message: impl Into<String>) -> Error {
     }
 }
 
-/// Parse TOML config, mapping syntax failures to [`Error::Parse`] with spans.
+/// Parse TOML config, mapping syntax failures to [`Error::Parse`] with line/column.
 pub(crate) fn parse_toml<T>(path: &Path, content: &str) -> Result<T>
 where
     T: serde::de::DeserializeOwned,
 {
     toml::from_str(content).map_err(|err: toml::de::Error| {
-        let span = err
-            .span()
-            .map(|range| SourceSpan::new(range.start.into(), range.len()));
+        let message = match err.span() {
+            Some(span) => {
+                let (line, column) = line_column(content, span.start);
+                format!("{} (line {line}, column {column})", err.message())
+            }
+            None => err.message().to_string(),
+        };
         Error::Parse {
             path: path.display().to_string(),
-            message: err.message().to_string(),
-            src: NamedSource::new(path.display().to_string(), content.to_string()),
-            span,
+            message,
         }
     })
+}
+
+/// 1-based line/column for a byte offset (offsets past the end clamp safely).
+fn line_column(content: &str, offset: usize) -> (usize, usize) {
+    let prefix = content.get(..offset).unwrap_or(content);
+    let line = prefix.bytes().filter(|&byte| byte == b'\n').count() + 1;
+    let column = prefix
+        .rsplit('\n')
+        .next()
+        .map(|fragment| fragment.chars().count() + 1)
+        .unwrap_or(1);
+    (line, column)
 }
 
 pub mod config;

@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Rust CLI + library, Milestones 0–1 done. `validate` is fully working (local sources end-to-end; remote kinds validate structurally and stop at the Milestone 2 firewall); `generate`/`cache` still return `unimplemented` (see `ROADMAP.md`).
+Rust CLI + library, Milestones 0–2 done. `validate` resolves all four source kinds (remotes fetched through the content-addressed cache); `cache clear` works; `generate` still returns `unimplemented` (see `ROADMAP.md`).
 
 ## Toolchain
 

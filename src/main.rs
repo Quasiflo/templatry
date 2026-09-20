@@ -107,7 +107,7 @@ async fn run(cli: Cli) -> miette::Result<()> {
         }
         Some(Commands::Validate { config }) => {
             reject_bare_watch_flag(cli.watch)?;
-            templatry::validate::run(config.as_deref())?;
+            templatry::validate::run(config.as_deref()).await?;
             Ok(())
         }
         Some(Commands::Cache {

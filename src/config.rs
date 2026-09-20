@@ -260,7 +260,7 @@ pub fn validate_git_transport(source: &SourceRef) -> crate::Result<()> {
 }
 
 /// True for a full 40-character commit SHA.
-fn is_full_sha(value: &str) -> bool {
+pub(crate) fn is_full_sha(value: &str) -> bool {
     value.len() == 40 && is_hex(value)
 }
 
