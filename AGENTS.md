@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Greenfield Rust CLI + library. `src/` is currently empty — nothing implemented yet.
+Rust CLI + library, Milestone 0 scaffolded. `src/` has `lib.rs`/`main.rs` plus stub modules — every verb returns `unimplemented` until its milestone lands (see `ROADMAP.md`).
 
 ## Toolchain
 
@@ -9,11 +9,9 @@ Greenfield Rust CLI + library. `src/` is currently empty — nothing implemented
 
 ## Layout
 
-- `Cargo.toml` declares both targets, neither file exists yet — create first:
-  - `src/lib.rs` → `templatry` library
-  - `src/main.rs` → `templatry` binary
-- No dependencies in `Cargo.toml`. `Cargo.lock` only lists the root package.
-- `tests/` is empty (only `.DS_Store`). `docs/` only has empty `docs/assets/`.
+- `src/lib.rs` holds `Error` (`thiserror` + `miette`, codes like `templatry::unimplemented`) and `Result`, plus modules `config`, `source`, `merge`, `generate`, `watch`, `validate`. `src/main.rs` is a thin clap shell (`generate` default, `validate`, `cache clear`, bare `--watch` alias); logic must live in lib fns (`generate::run`, `validate::run`, `source::cache_clear`) so it stays testable.
+- Dependencies pinned per `ROADMAP.md` Pinned Dependencies; `deny.toml` enforces advisories/bans/licenses/sources.
+- `tests/common/mod.rs` is the gold-file harness (`BLESS=1` to bless, always review the diff); suites add `tests/fixtures/<suite>/` cases per milestone.
 - Release-please config lives in `.config/` (`rp-config.json` + `rp-manifest.json`), not repo root. Release type `rust`, `bump-minor-pre-major: true`.
 
 ## Commands
@@ -30,6 +28,6 @@ hk check                    # pre-commit gate: rumdl + zizmor + cargo clippy/fmt
 ## Lint / Style Gotchas
 
 - Pre-commit gate is `.config/hk.pkl`. CI does NOT run it — only `release-please.yml` exists in `.github/workflows/`, so run `hk check` locally.
-- `hk` includes a `cargo deny` step but there is no `deny.toml` yet — that check will fail until one is added or the step removed.
+- `hk` includes a `cargo deny` step backed by `deny.toml` (cargo-deny 0.20.2 via mise/aqua). 0.20 schema note: `unmaintained`/`unsound` take scope values (`all`/`workspace`/`transitive`/`none`), not severities.
 - Markdown lint is `rumdl` with `.config/rumdl.toml`: `MD013` disabled, `CHANGELOG.md` excluded. Never hard-wrap markdown (`.vscode/settings.json` uses visual wrap).
 - `zizmor` lints GitHub Actions; keep `permissions: {}` at top level on new workflows (see `release-please.yml`).

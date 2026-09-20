@@ -1,5 +1,6 @@
 [tools]
 "core:rust" = "1.98.1"
+"aqua:EmbarkStudios/cargo-deny" = "0.20.2"  # Used for auditing dependencies (hk cargo deny step)
 "aqua:jdx/hk" = "2.0.0"                       # Used for linting, formatting & git hooks
 "aqua:rvben/rumdl" = "0.2.71"                 # Used for linting & formatting markdown
 "github:zizmorcore/zizmor" = "v1.30.1"        # Used for statically analyzing github actions
