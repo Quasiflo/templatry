@@ -93,11 +93,7 @@ pub(crate) async fn load_context(options: &Options) -> crate::Result<ProjectCont
     let content = crate::read_file(&source_file)?;
     let source: SourceFile = crate::parse_toml(&source_file, &content)?;
     source.validate(&resolved.root_dir, &source_file)?;
-    let enabled = config::resolve_enabled_templates(
-        &source,
-        &project.source.enable_labels,
-        &project.source.disable_labels,
-    )?;
+    let enabled = config::resolve_enabled_templates(&source, &project.source)?;
     Ok(ProjectContext {
         project_file,
         project_root,
@@ -299,6 +295,15 @@ pub(crate) fn render_contents(
                 value: merged,
                 format,
             })
+        }
+        EffectiveStrategy::None => {
+            if override_text.is_some() {
+                tracing::warn!(
+                    template = name,
+                    "override ignored: strategy `none` always copies the template verbatim"
+                );
+            }
+            Ok(Rendered::Text(template_text.to_string()))
         }
     }
 }

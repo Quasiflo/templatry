@@ -587,6 +587,12 @@ fn fold_text(
             dest,
             "internal error: text fold called for a structured template".to_string(),
         )),
+        EffectiveStrategy::None => Err(crate::invalid(
+            dest,
+            format!(
+                "template `{name}`: strategy `none` copies the template verbatim with no override to fold into"
+            ),
+        )),
     }
 }
 
@@ -980,6 +986,24 @@ mod tests {
         let err = backpropagate(Path::new("out.txt"), b"TEMPLATRY\n", b"CHANGED\n", &members)
             .unwrap_err();
         assert!(err.to_string().contains("template portion"), "{err:?}");
+    }
+
+    #[test]
+    fn none_strategy_has_no_override_to_fold_into() {
+        let labels = labels(&[]);
+        let members = [view(
+            "license",
+            &labels,
+            "MIT\n",
+            Some("WRONG\n"),
+            EffectiveStrategy::None,
+        )];
+        let err =
+            backpropagate(Path::new("out.txt"), b"MIT\n", b"CHANGED\n", &members).unwrap_err();
+        assert!(
+            err.to_string().contains("no override to fold into"),
+            "{err:?}"
+        );
     }
 
     #[test]

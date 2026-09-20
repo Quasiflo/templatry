@@ -1,0 +1,3 @@
+[source]
+path = "templates"
+include_templates = ["b"]

@@ -55,6 +55,8 @@ pub enum EffectiveStrategy {
     AppendBottom,
     /// Emit the override file verbatim.
     Replace,
+    /// Copy the template file verbatim, ignoring any override.
+    None,
 }
 
 /// Resolve a template's strategy: explicit values win, otherwise auto-detect
@@ -68,6 +70,7 @@ pub fn effective_strategy(
         Some(Strategy::AppendTop) => Ok(EffectiveStrategy::AppendTop),
         Some(Strategy::AppendBottom) => Ok(EffectiveStrategy::AppendBottom),
         Some(Strategy::Replace) => Ok(EffectiveStrategy::Replace),
+        Some(Strategy::None) => Ok(EffectiveStrategy::None),
         Some(Strategy::Merge) => match format_for(generated_filename) {
             Some(format) => Ok(EffectiveStrategy::Structured(format)),
             None => Err(crate::invalid(
@@ -640,6 +643,10 @@ mod tests {
             EffectiveStrategy::Replace
         );
         assert_eq!(
+            effective_strategy(&template_with(Some(Strategy::None)), "a.json").unwrap(),
+            EffectiveStrategy::None
+        );
+        assert_eq!(
             effective_strategy(&template_with(Some(Strategy::Merge)), "a.toml").unwrap(),
             EffectiveStrategy::Structured(DocFormat::Toml)
         );
@@ -907,6 +914,10 @@ mod tests {
         assert_eq!(family_of(&auto, "a.txt").unwrap(), Family::Text);
         assert_eq!(
             family_of(&template_with(Some(Strategy::Replace)), "a.json").unwrap(),
+            Family::Text
+        );
+        assert_eq!(
+            family_of(&template_with(Some(Strategy::None)), "LICENSE").unwrap(),
             Family::Text
         );
     }

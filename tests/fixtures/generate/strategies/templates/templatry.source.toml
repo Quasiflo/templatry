@@ -15,3 +15,8 @@ template = "tool.toml"
 template = "base.env"
 strategy = "replace"
 generated_dir = ""
+
+[templates.license]
+template = "license.txt"
+strategy = "none"
+generated_dir = ""

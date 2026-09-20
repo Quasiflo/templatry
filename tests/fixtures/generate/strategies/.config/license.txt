@@ -1,0 +1,1 @@
+A decoy override: strategy none always copies the template.

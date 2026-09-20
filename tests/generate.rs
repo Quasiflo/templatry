@@ -49,6 +49,7 @@ fn all_generate_fixtures_are_known() {
             "shared-conflict",
             "shared-destination",
             "strategies",
+            "template-select",
         ]
     );
 }
@@ -88,6 +89,16 @@ async fn golden_shared_destination() {
         .await
         .expect("generate");
     common::assert_tree_matches(&root, &source_case("shared-destination").join("expected"));
+}
+
+#[tokio::test]
+async fn golden_template_select() {
+    let (_temp, root) = setup("template-select");
+    generate::run(&options(&root, |_| {}))
+        .await
+        .expect("generate");
+    common::assert_tree_matches(&root, &source_case("template-select").join("expected"));
+    common::assert_absent(&root, &source_case("template-select"));
 }
 
 #[tokio::test]

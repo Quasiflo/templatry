@@ -90,12 +90,12 @@ Rules: `ref` is required for GitHub and git kinds and rejected as meaningless fo
 
 ```toml
 [source]
-path = "../templates"
+path = "templates"
 enable_labels = ["dart"]    # force these on
 disable_labels = ["legacy"] # force these off (wins ties)
 ```
 
-Unknown labels are an error.
+Unknown labels are an error. Individual templates can also be picked directly, on top of label selection: `include_templates` restricts generation to the listed templates (absent means no restriction, present-but-empty disables everything), while `exclude_templates` removes listed ones and wins all ties. Unknown template names are an error.
 
 ## Source Configuration
 
@@ -112,7 +112,7 @@ override_file = "settings.json"  # defaults to the template basename
 override_dir = ".config/"        # defaults to default_override_dir
 generated_file = "settings.json" # defaults to the template basename
 generated_dir = ".config/generated" # defaults to default_generated_dir
-strategy = "merge"               # merge | append_top | append_bottom | replace; default: auto-detect
+strategy = "merge"               # merge | append_top | append_bottom | replace | none; default: auto-detect
 array_policy = "union"           # union | replace; default: union
 back_propagate = false           # watch generated edits back into the override
 labels = ["rust"]
@@ -133,6 +133,7 @@ Omitted `strategy` auto-detects on the generated filename: `json`, `jsonc`, `yam
 | `append_top`    | Override bytes, newline, then template bytes |
 | `append_bottom` | Template bytes, newline, then override bytes |
 | `replace`       | Override file verbatim (missing override is an error) |
+| `none`          | Template file verbatim, ignoring any override (for licenses etc) |
 
 Structured merge recurses through objects with the override winning; scalars and type mismatches replace. Arrays follow `array_policy`: `union` appends override items (scalars deduped, objects always appended, as in `smartworkspace`) while `replace` takes the override array wholesale. Setting a key to `_TEMPLATRY_DELETE_` in the override deletes it (value position only; document-root and in-array uses are errors). A missing or empty override file means the template passes through (except `replace`, which errors).
 

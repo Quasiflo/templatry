@@ -74,6 +74,12 @@ pub struct SourceRef {
     /// Labels to disable on top of the source `[default]` rules (wins ties).
     #[serde(default)]
     pub disable_labels: Vec<String>,
+    /// Templates to enable on top of label selection (absent means no restriction).
+    #[serde(default)]
+    pub include_templates: Option<Vec<String>>,
+    /// Templates to disable after everything else (wins all ties).
+    #[serde(default)]
+    pub exclude_templates: Vec<String>,
 }
 
 /// The four v1 template source kinds.
@@ -391,6 +397,8 @@ pub enum Strategy {
     AppendBottom,
     /// Emit the override file verbatim, ignoring the template.
     Replace,
+    /// Copy the template file verbatim, ignoring any override.
+    None,
 }
 
 /// Array merge policy for structured merges.
@@ -587,7 +595,8 @@ impl SourceFile {
 }
 
 impl Template {
-    /// Validate one template entry: path safety plus on-disk existence.
+    /// Validate one template entry: path safety, on-disk existence, and
+    /// back-propagation compatibility.
     fn validate(&self, name: &str, source_dir: &Path, display_path: &Path) -> crate::Result<()> {
         if self.template.trim().is_empty() {
             return Err(crate::invalid(
@@ -627,31 +636,57 @@ impl Template {
                 ),
             ));
         }
+        if self.back_propagate && self.strategy == Some(Strategy::None) {
+            return Err(crate::invalid(
+                display_path,
+                format!(
+                    "[templates.{name}] `back_propagate` needs an override to fold into, but strategy `none` copies the template verbatim: disable `back_propagate` or use another strategy"
+                ),
+            ));
+        }
         Ok(())
     }
 }
 
-// ---- Label resolution -------------------------------------------------------
+// ---- Label and template resolution --------------------------------------------
 
-/// Resolve the enabled template names for a label selection.
+/// Resolve the enabled template names for a project selection.
 ///
 /// Base rules come from the source `[default]` section (neither list means
 /// everything enabled); project `enable_labels` force on, `disable_labels`
-/// force off and win ties. Unknown project labels are an error.
+/// force off. Project `include_templates` then restricts to listed templates
+/// (absent means no restriction, present-but-empty disables everything) and
+/// `exclude_templates` removes listed ones, winning all ties. Unknown project
+/// labels and template names are an error.
 pub fn resolve_enabled_templates(
     source: &SourceFile,
-    project_enable: &[String],
-    project_disable: &[String],
+    project: &SourceRef,
 ) -> crate::Result<BTreeSet<String>> {
-    let known: BTreeSet<&str> = source.all_labels();
-    for label in project_enable.iter().chain(project_disable.iter()) {
-        if !known.contains(label.as_str()) {
+    let known_labels: BTreeSet<&str> = source.all_labels();
+    for label in project
+        .enable_labels
+        .iter()
+        .chain(project.disable_labels.iter())
+    {
+        if !known_labels.contains(label.as_str()) {
             return Err(crate::invalid(
                 Path::new("templatry.toml"),
                 format!(
                     "unknown label `{label}` (no template defines it): fix the typo or add the label to a template"
                 ),
             ));
+        }
+    }
+    if let Some(include) = project.include_templates.as_ref() {
+        for name in include {
+            if !source.templates.contains_key(name) {
+                return Err(unknown_template(name, source));
+            }
+        }
+    }
+    for name in &project.exclude_templates {
+        if !source.templates.contains_key(name) {
+            return Err(unknown_template(name, source));
         }
     }
 
@@ -671,15 +706,23 @@ pub fn resolve_enabled_templates(
         if template
             .labels
             .iter()
-            .any(|label| project_enable.contains(label))
+            .any(|label| project.enable_labels.contains(label))
         {
             on = true;
         }
         if template
             .labels
             .iter()
-            .any(|label| project_disable.contains(label))
+            .any(|label| project.disable_labels.contains(label))
         {
+            on = false;
+        }
+        if let Some(include) = project.include_templates.as_ref()
+            && !include.contains(name)
+        {
+            on = false;
+        }
+        if project.exclude_templates.contains(name) {
             on = false;
         }
         if on {
@@ -687,6 +730,19 @@ pub fn resolve_enabled_templates(
         }
     }
     Ok(enabled)
+}
+
+/// Unknown-template diagnostic listing what the source actually defines.
+fn unknown_template(name: &str, source: &SourceFile) -> crate::Error {
+    let mut available: Vec<&str> = source.templates.keys().map(String::as_str).collect();
+    available.sort();
+    crate::invalid(
+        Path::new("templatry.toml"),
+        format!(
+            "unknown template `{name}` (source defines: {}): fix the typo or add the template to the source",
+            available.join(", ")
+        ),
+    )
 }
 
 #[cfg(test)]
@@ -705,6 +761,10 @@ mod tests {
 
     fn project_ref(body: &str) -> SourceRef {
         parse_project(&format!("[source]\n{body}")).source
+    }
+
+    fn empty_project() -> SourceRef {
+        project_ref("path = \"x\"\n")
     }
 
     /// Temp source dir containing one `{}` file per listed relative path.
@@ -775,6 +835,7 @@ exclude_labels = ["dart"]
             ("append_top", Strategy::AppendTop),
             ("append_bottom", Strategy::AppendBottom),
             ("replace", Strategy::Replace),
+            ("none", Strategy::None),
         ] {
             let source = parse_source(&format!(
                 "[templates.app]\ntemplate = \"a.json\"\nstrategy = \"{value}\"\n"
@@ -885,6 +946,19 @@ exclude_labels = ["dart"]
     }
 
     #[test]
+    fn backpropagate_none_rejected() {
+        let dir = source_dir_with(&["license.txt"]);
+        let source = parse_source(
+            "[templates.license]\ntemplate = \"license.txt\"\nstrategy = \"none\"\nback_propagate = true\n",
+        );
+        let err = source.validate(dir.path(), &display()).unwrap_err();
+        assert!(
+            err.to_string().contains("needs an override to fold into"),
+            "{err:?}"
+        );
+    }
+
+    #[test]
     fn unknown_default_label_rejected() {
         let dir = source_dir_with(&["a.json"]);
         let source = parse_source(
@@ -899,7 +973,7 @@ exclude_labels = ["dart"]
         let source = parse_source(
             "[templates.a]\ntemplate = \"a.json\"\nlabels = [\"rust\"]\n[templates.b]\ntemplate = \"b.json\"\n",
         );
-        let enabled = resolve_enabled_templates(&source, &[], &[]).unwrap();
+        let enabled = resolve_enabled_templates(&source, &empty_project()).unwrap();
         assert_eq!(enabled, BTreeSet::from(["a".to_string(), "b".to_string()]));
     }
 
@@ -908,7 +982,7 @@ exclude_labels = ["dart"]
         let source = parse_source(
             "[templates.a]\ntemplate = \"a.json\"\nlabels = [\"rust\"]\n[templates.b]\ntemplate = \"b.json\"\n[default]\ninclude_labels = [\"rust\"]\n",
         );
-        let enabled = resolve_enabled_templates(&source, &[], &[]).unwrap();
+        let enabled = resolve_enabled_templates(&source, &empty_project()).unwrap();
         assert_eq!(enabled, BTreeSet::from(["a".to_string()]));
     }
 
@@ -917,7 +991,7 @@ exclude_labels = ["dart"]
         let source = parse_source(
             "[templates.a]\ntemplate = \"a.json\"\nlabels = [\"rust\"]\n[default]\ninclude_labels = []\n",
         );
-        let enabled = resolve_enabled_templates(&source, &[], &[]).unwrap();
+        let enabled = resolve_enabled_templates(&source, &empty_project()).unwrap();
         assert!(enabled.is_empty());
     }
 
@@ -926,7 +1000,7 @@ exclude_labels = ["dart"]
         let source = parse_source(
             "[templates.a]\ntemplate = \"a.json\"\nlabels = [\"rust\"]\n[templates.b]\ntemplate = \"b.json\"\n[default]\nexclude_labels = [\"rust\"]\n",
         );
-        let enabled = resolve_enabled_templates(&source, &[], &[]).unwrap();
+        let enabled = resolve_enabled_templates(&source, &empty_project()).unwrap();
         assert_eq!(enabled, BTreeSet::from(["b".to_string()]));
     }
 
@@ -935,20 +1009,73 @@ exclude_labels = ["dart"]
         let source = parse_source(
             "[templates.a]\ntemplate = \"a.json\"\nlabels = [\"rust\"]\n[templates.b]\ntemplate = \"b.json\"\nlabels = [\"dart\"]\n[default]\ninclude_labels = [\"rust\"]\n",
         );
-        let enable = ["dart".to_string()];
-        let enabled = resolve_enabled_templates(&source, &enable, &[]).unwrap();
+        let project = project_ref("path = \"x\"\nenable_labels = [\"dart\"]\n");
+        let enabled = resolve_enabled_templates(&source, &project).unwrap();
         assert_eq!(enabled, BTreeSet::from(["a".to_string(), "b".to_string()]));
 
-        let disable = ["rust".to_string(), "dart".to_string()];
-        let enabled = resolve_enabled_templates(&source, &enable, &disable).unwrap();
+        let project = project_ref(
+            "path = \"x\"\nenable_labels = [\"dart\"]\ndisable_labels = [\"rust\", \"dart\"]\n",
+        );
+        let enabled = resolve_enabled_templates(&source, &project).unwrap();
         assert!(enabled.is_empty());
     }
 
     #[test]
     fn unknown_project_label_rejected() {
         let source = parse_source("[templates.a]\ntemplate = \"a.json\"\nlabels = [\"rust\"]\n");
-        let err = resolve_enabled_templates(&source, &["nope".to_string()], &[]).unwrap_err();
+        let project = project_ref("path = \"x\"\nenable_labels = [\"nope\"]\n");
+        let err = resolve_enabled_templates(&source, &project).unwrap_err();
         assert!(err.to_string().contains("unknown label `nope`"), "{err:?}");
+    }
+
+    #[test]
+    fn include_templates_restricts_to_listed() {
+        let source = parse_source(
+            "[templates.a]\ntemplate = \"a.json\"\nlabels = [\"rust\"]\n[templates.b]\ntemplate = \"b.json\"\nlabels = [\"dart\"]\n",
+        );
+        let project = project_ref("path = \"x\"\ninclude_templates = [\"b\"]\n");
+        let enabled = resolve_enabled_templates(&source, &project).unwrap();
+        assert_eq!(enabled, BTreeSet::from(["b".to_string()]));
+    }
+
+    #[test]
+    fn empty_include_templates_disables_everything() {
+        let source = parse_source(
+            "[templates.a]\ntemplate = \"a.json\"\nlabels = [\"rust\"]\n[templates.b]\ntemplate = \"b.json\"\n",
+        );
+        let project = project_ref("path = \"x\"\ninclude_templates = []\n");
+        let enabled = resolve_enabled_templates(&source, &project).unwrap();
+        assert!(enabled.is_empty());
+    }
+
+    #[test]
+    fn exclude_templates_wins_all_ties() {
+        let source = parse_source(
+            "[templates.a]\ntemplate = \"a.json\"\nlabels = [\"rust\"]\n[templates.b]\ntemplate = \"b.json\"\nlabels = [\"dart\"]\n[default]\ninclude_labels = [\"rust\", \"dart\"]\n",
+        );
+        // Excludes a label-enabled template and an include-listed one alike.
+        let project = project_ref(
+            "path = \"x\"\ninclude_templates = [\"a\", \"b\"]\nexclude_templates = [\"b\"]\n",
+        );
+        let enabled = resolve_enabled_templates(&source, &project).unwrap();
+        assert_eq!(enabled, BTreeSet::from(["a".to_string()]));
+    }
+
+    #[test]
+    fn unknown_template_name_rejected() {
+        let source = parse_source("[templates.a]\ntemplate = \"a.json\"\n");
+        let project = project_ref("path = \"x\"\ninclude_templates = [\"nope\"]\n");
+        let err = resolve_enabled_templates(&source, &project).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("unknown template `nope`"), "{message}");
+        assert!(message.contains('a'), "{message}");
+
+        let project = project_ref("path = \"x\"\nexclude_templates = [\"nope\"]\n");
+        let err = resolve_enabled_templates(&source, &project).unwrap_err();
+        assert!(
+            err.to_string().contains("unknown template `nope`"),
+            "{err:?}"
+        );
     }
 
     #[test]
@@ -1044,6 +1171,8 @@ exclude_labels = ["dart"]
                 use_https: None,
                 enable_labels: vec![],
                 disable_labels: vec![],
+                include_templates: None,
+                exclude_templates: vec![],
             },
         }
         .source

@@ -1,0 +1,7 @@
+[templates.a]
+template = "a.json"
+labels = ["rust"]
+
+[templates.b]
+template = "b.json"
+labels = ["dart"]

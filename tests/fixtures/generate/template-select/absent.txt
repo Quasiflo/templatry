@@ -1,0 +1,2 @@
+# restricted by include_templates: must not be generated
+.config/generated/a.json
