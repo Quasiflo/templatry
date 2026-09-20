@@ -27,12 +27,6 @@ pub struct Options {
     pub offline: bool,
 }
 
-/// Conflict snapshot directory name inside the system temp dir.
-///
-/// On back-propagation safety-check mismatch, the conflicting generated
-/// content is recoverable here at `<stem>.<timestamp>.conflict.<ext>`.
-pub const CONFLICT_SNAPSHOT_DIR_NAME: &str = "templatry-conflicts";
-
 /// One planned file write: destination plus complete new content.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlannedWrite {
@@ -232,13 +226,52 @@ pub(crate) fn render_template(
             };
             Ok(Rendered::Text(decode(&bytes, &override_path)?))
         }
-        EffectiveStrategy::AppendTop | EffectiveStrategy::AppendBottom => {
+        _ => {
             let template_text = decode(&template_bytes, &template_path)?;
-            let Some(bytes) = override_bytes else {
-                return Ok(Rendered::Text(template_text));
+            let override_text = match override_bytes {
+                Some(bytes) => Some(decode(&bytes, &override_path)?),
+                None => None,
             };
-            let override_text = decode(&bytes, &override_path)?;
-            if override_text.contains(merge::DELETE_MARKER) {
+            render_contents(
+                &template_text,
+                override_text.as_deref(),
+                strategy,
+                template.array_policy,
+                name,
+            )
+        }
+    }
+}
+
+/// Render template and override text into a [`Rendered`] output.
+///
+/// Pure over file contents: file IO, missing-override handling, and strategy
+/// resolution stay in [`render_template`]. Used directly by back-propagation
+/// safety replays (Milestone 5).
+pub(crate) fn render_contents(
+    template_text: &str,
+    override_text: Option<&str>,
+    strategy: EffectiveStrategy,
+    policy: crate::config::ArrayPolicy,
+    name: &str,
+) -> crate::Result<Rendered> {
+    match strategy {
+        EffectiveStrategy::Replace => {
+            let Some(text) = override_text else {
+                return Err(crate::invalid(
+                    Path::new("templatry.source.toml"),
+                    format!(
+                        "template `{name}` uses `replace` but no override content exists: create the override file (replace emits it verbatim)"
+                    ),
+                ));
+            };
+            Ok(Rendered::Text(text.to_string()))
+        }
+        EffectiveStrategy::AppendTop | EffectiveStrategy::AppendBottom => {
+            let Some(text) = override_text else {
+                return Ok(Rendered::Text(template_text.to_string()));
+            };
+            if text.contains(merge::DELETE_MARKER) {
                 tracing::warn!(
                     template = name,
                     "override contains `{}` but the strategy is not a structured merge: kept literally",
@@ -247,23 +280,18 @@ pub(crate) fn render_template(
             }
             match strategy {
                 EffectiveStrategy::AppendTop => {
-                    Ok(Rendered::Text(format!("{override_text}\n{template_text}")))
+                    Ok(Rendered::Text(format!("{text}\n{template_text}")))
                 }
-                _ => Ok(Rendered::Text(format!("{template_text}\n{override_text}"))),
+                _ => Ok(Rendered::Text(format!("{template_text}\n{text}"))),
             }
         }
         EffectiveStrategy::Structured(format) => {
-            let template_text = decode(&template_bytes, &template_path)?;
-            let base = merge::parse_doc(&template_text, format, &format!("template `{name}`"))?;
-            let merged = match override_bytes {
-                Some(bytes) => {
-                    let override_text = decode(&bytes, &override_path)?;
-                    let over = merge::parse_doc(
-                        &override_text,
-                        format,
-                        &format!("override for template `{name}`"),
-                    )?;
-                    merge::merge_structured(base, over, template.array_policy, name)?
+            let base = merge::parse_doc(template_text, format, &format!("template `{name}`"))?;
+            let merged = match override_text {
+                Some(text) => {
+                    let over =
+                        merge::parse_doc(text, format, &format!("override for template `{name}`"))?;
+                    merge::merge_structured(base, over, policy, name)?
                 }
                 None => base,
             };
@@ -357,7 +385,7 @@ fn apply_check(plan: &[PlannedWrite]) -> crate::Result<()> {
 }
 
 /// Write a file atomically via temp-file-plus-rename in the same directory.
-fn atomic_write(dest: &Path, content: &[u8]) -> crate::Result<()> {
+pub(crate) fn atomic_write(dest: &Path, content: &[u8]) -> crate::Result<()> {
     let parent = dest.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(parent)
         .map_err(|err| crate::invalid(dest, format!("cannot create parent directory: {err}")))?;

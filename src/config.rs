@@ -516,12 +516,16 @@ impl SourceFile {
                 ));
             }
             let mut families = BTreeSet::new();
+            let mut back_propagated = Vec::new();
             for name in names {
                 let template = &self.templates[*name];
                 families.insert(crate::merge::family_of(
                     template,
                     &template.resolved_generated_file()?,
                 )?);
+                if template.back_propagate {
+                    back_propagated.push(*name);
+                }
             }
             if families.len() > 1 {
                 return Err(crate::invalid(
@@ -529,6 +533,16 @@ impl SourceFile {
                     format!(
                         "templates {} all target `{dir}/{file}`, but mix structured merges with text strategies: align them to one family",
                         names.join("`, `")
+                    ),
+                ));
+            }
+            if !back_propagated.is_empty() && families.contains(&crate::merge::Family::Text) {
+                return Err(crate::invalid(
+                    display_path,
+                    format!(
+                        "templates {} all target `{dir}/{file}`, but back propagation into a shared text destination cannot attribute edits to one override ({}): use structured merge strategies for label-split files",
+                        names.join("`, `"),
+                        back_propagated.join("`, `")
                     ),
                 ));
             }
@@ -842,6 +856,21 @@ exclude_labels = ["dart"]
         );
         let err = source.validate(dir.path(), &display()).unwrap_err();
         assert!(err.to_string().contains("cannot combine"), "{err:?}");
+    }
+
+    #[test]
+    fn shared_text_backprop_rejected() {
+        let dir = source_dir_with(&["a.txt", "b.txt"]);
+        let source = parse_source(
+            "[templates.a]\ntemplate = \"a.txt\"\ngenerated_file = \"out.txt\"\nback_propagate = true\n[templates.b]\ntemplate = \"b.txt\"\ngenerated_file = \"out.txt\"\n",
+        );
+        let err = source.validate(dir.path(), &display()).unwrap_err();
+        assert!(err.to_string().contains("cannot attribute"), "{err:?}");
+
+        let single = parse_source("[templates.a]\ntemplate = \"a.txt\"\nback_propagate = true\n");
+        single
+            .validate(dir.path(), &display())
+            .expect("single text backprop");
     }
 
     #[test]

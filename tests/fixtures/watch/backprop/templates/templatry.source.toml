@@ -1,0 +1,3 @@
+[templates.app]
+template = "app.json"
+back_propagate = true

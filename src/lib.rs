@@ -5,8 +5,9 @@
 //! - [`config`]: project and source configuration schemas (Milestone 1).
 //! - [`source`]: template source retrieval, caching, and integrity (Milestone 2).
 //! - [`merge`]: structured and text merge strategies (Milestone 3).
-//! - [`generate`]: generation orchestration, check/dry-run, back-propagation (Milestones 3, 5).
+//! - [`generate`]: generation orchestration, check/dry-run diffing (Milestone 3).
 //! - [`watch`]: file watching and regeneration dispatch (Milestone 4).
+//! - [`backprop`]: two-way sync folding generated edits into overrides (Milestone 5).
 //! - [`validate`]: project and source validation diagnostics (Milestone 1).
 
 use std::path::Path;
@@ -122,6 +123,7 @@ pub(crate) fn read_file_bytes(path: &Path) -> Result<Vec<u8>> {
     std::fs::read(path).map_err(|err| invalid(path, format!("cannot read file: {err}")))
 }
 
+pub mod backprop;
 pub mod config;
 pub mod generate;
 pub mod merge;

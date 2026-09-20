@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Rust CLI + library, Milestones 0–4 done. `validate` resolves all four source kinds (remotes fetched through the content-addressed cache); `generate` (with `--check`/`--dry-run`/`--watch`), `validate`, and `cache clear` work; back-propagation still regenerates forward until Milestone 5 (see `ROADMAP.md`).
+Rust CLI + library, Milestones 0–5 done. `validate` resolves all four source kinds (remotes fetched through the content-addressed cache); `generate` (with `--check`/`--dry-run`/`--watch`), `validate`, and `cache clear` work; `back_propagate` templates fold generated edits into overrides with safety replays (see `ROADMAP.md`).
 
 ## Toolchain
 
@@ -9,7 +9,7 @@ Rust CLI + library, Milestones 0–4 done. `validate` resolves all four source k
 
 ## Layout
 
-- `src/lib.rs` holds `Error` (`thiserror` + `miette`, codes like `templatry::unimplemented`) and `Result`, plus modules `config`, `source`, `merge`, `generate`, `watch`, `validate`. `src/main.rs` is a thin clap shell (`generate` default, `validate`, `cache clear`, bare `--watch` alias); logic must live in lib fns (`generate::run`, `validate::run`, `source::cache_clear`) so it stays testable.
+- `src/lib.rs` holds `Error` (`thiserror` + `miette`, codes like `templatry::unimplemented`) and `Result`, plus modules `config`, `source`, `merge`, `generate`, `watch`, `backprop`, `validate`. `src/main.rs` is a thin clap shell (`generate` default, `validate`, `cache clear`, bare `--watch` alias); logic must live in lib fns (`generate::run`, `validate::run`, `source::cache_clear`) so it stays testable.
 - Dependencies pinned per `ROADMAP.md` Pinned Dependencies; `deny.toml` enforces advisories/bans/licenses/sources.
 - `tests/common/mod.rs` is the gold-file harness (`BLESS=1` to bless, always review the diff); suites add `tests/fixtures/<suite>/` cases per milestone.
 - Release-please config lives in `.config/` (`rp-config.json` + `rp-manifest.json`), not repo root. Release type `rust`, `bump-minor-pre-major: true`.
