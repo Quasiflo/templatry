@@ -42,7 +42,7 @@ enum Commands {
         #[arg(long, conflicts_with = "watch")]
         check: bool,
         /// Print planned writes without touching disk.
-        #[arg(long, conflicts_with = "check")]
+        #[arg(long, conflicts_with_all = ["check", "watch"])]
         dry_run: bool,
         /// Use a project config other than `.config/templatry.toml`.
         #[arg(long, value_name = "PATH")]

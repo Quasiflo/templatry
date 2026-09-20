@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Rust CLI + library, Milestones 0–3 done. `validate` resolves all four source kinds (remotes fetched through the content-addressed cache); `generate` (with `--check`/`--dry-run`), `validate`, and `cache clear` work; `--watch` still returns `unimplemented` (see `ROADMAP.md`).
+Rust CLI + library, Milestones 0–4 done. `validate` resolves all four source kinds (remotes fetched through the content-addressed cache); `generate` (with `--check`/`--dry-run`/`--watch`), `validate`, and `cache clear` work; back-propagation still regenerates forward until Milestone 5 (see `ROADMAP.md`).
 
 ## Toolchain
 

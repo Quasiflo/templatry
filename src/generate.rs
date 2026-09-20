@@ -7,7 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::config::{
-    self, Configs, PROJECT_CONFIG_PATH, ProjectConfig, SOURCE_CONFIG_FILENAME, SourceFile, Template,
+    self, Configs, PROJECT_CONFIG_PATH, ProjectConfig, SOURCE_CONFIG_FILENAME, SourceFile,
+    SourceKind, Template,
 };
 use crate::merge::{self, EffectiveStrategy, GroupPart, Rendered};
 
@@ -48,7 +49,13 @@ pub struct PlannedWrite {
 /// `--dry-run` prints planned writes without touching disk.
 pub async fn run(options: &Options) -> crate::Result<()> {
     if options.watch {
-        return Err(crate::Error::unimplemented("watch mode (Milestone 4)"));
+        if options.check || options.dry_run {
+            return Err(crate::Error::Usage(
+                "`--watch` cannot combine with `--check` or `--dry-run`: run them separately"
+                    .to_string(),
+            ));
+        }
+        return crate::watch::run(options).await;
     }
     let plan = plan(options).await?;
     if options.check {
@@ -60,15 +67,30 @@ pub async fn run(options: &Options) -> crate::Result<()> {
         }
         return Ok(());
     }
-    for write in &plan {
-        atomic_write(&write.dest, &write.content)?;
-    }
+    write_plan(&plan)?;
     tracing::info!(files = plan.len(), "generated configuration files");
     Ok(())
 }
 
-/// Compute the full write plan without touching disk (the test seam for [`run`]).
-pub async fn plan(options: &Options) -> crate::Result<Vec<PlannedWrite>> {
+/// Loaded project state shared by one-shot generation and watch cycles.
+#[derive(Debug, Clone)]
+pub(crate) struct ProjectContext {
+    /// Project config file (change triggers a full reload in watch mode).
+    pub project_file: PathBuf,
+    /// Repository root: base for override, generated, and local-source paths.
+    pub project_root: PathBuf,
+    /// Source root holding `templatry.source.toml`.
+    pub source_root: PathBuf,
+    /// Validated source definition.
+    pub source: SourceFile,
+    /// Enabled template names, sorted.
+    pub enabled: Vec<String>,
+    /// Source kind (local sources also watch their source file).
+    pub kind: SourceKind,
+}
+
+/// Locate, resolve, load, validate, and select: everything before rendering.
+pub(crate) async fn load_context(options: &Options) -> crate::Result<ProjectContext> {
     let (project_file, project_root) = locate_project(options.config.as_deref())?;
     let content = crate::read_file(&project_file)?;
     let project: ProjectConfig = crate::parse_toml(&project_file, &content)?;
@@ -82,61 +104,96 @@ pub async fn plan(options: &Options) -> crate::Result<Vec<PlannedWrite>> {
         &project.source.enable_labels,
         &project.source.disable_labels,
     )?;
+    Ok(ProjectContext {
+        project_file,
+        project_root,
+        source_root: resolved.root_dir,
+        source,
+        enabled: enabled.into_iter().collect(),
+        kind: resolved.kind,
+    })
+}
 
-    let mut rendered = Vec::new();
-    for name in &enabled {
-        let template = &source.templates[name];
-        let dest = project_root
-            .join(template.resolved_generated_dir(&source.configs))
+/// One destination group member: everything needed to re-render it on change.
+#[derive(Debug, Clone)]
+pub(crate) struct GroupMember {
+    pub name: String,
+    pub labels: BTreeSet<String>,
+    pub template: Template,
+}
+
+/// Group enabled templates by destination file.
+pub(crate) fn group_members(
+    context: &ProjectContext,
+) -> crate::Result<BTreeMap<PathBuf, Vec<GroupMember>>> {
+    let mut groups: BTreeMap<PathBuf, Vec<GroupMember>> = BTreeMap::new();
+    for name in &context.enabled {
+        let template = &context.source.templates[name];
+        let dest = context
+            .project_root
+            .join(template.resolved_generated_dir(&context.source.configs))
             .join(template.resolved_generated_file()?);
-        let output = render_template(
-            template,
-            name,
-            &resolved.root_dir,
-            &project_root,
-            &source.configs,
-        )?;
-        rendered.push(RenderedTemplate {
+        groups.entry(dest).or_default().push(GroupMember {
             name: name.clone(),
             labels: template.labels.clone(),
-            dest,
-            rendered: output,
+            template: template.clone(),
         });
     }
+    Ok(groups)
+}
 
-    let mut groups: BTreeMap<PathBuf, Vec<usize>> = BTreeMap::new();
-    for (index, item) in rendered.iter().enumerate() {
-        groups.entry(item.dest.clone()).or_default().push(index);
+/// Render one destination group into final bytes.
+pub(crate) fn render_group(
+    dest: &Path,
+    members: &[GroupMember],
+    context: &ProjectContext,
+) -> crate::Result<Vec<u8>> {
+    let mut rendered = Vec::with_capacity(members.len());
+    for member in members {
+        let output = render_template(
+            &member.template,
+            &member.name,
+            &context.source_root,
+            &context.project_root,
+            &context.source.configs,
+        )?;
+        rendered.push((member.name.as_str(), &member.labels, output));
     }
+    let parts: Vec<GroupPart<'_>> = rendered
+        .iter()
+        .map(|(name, labels, output)| GroupPart {
+            template: name,
+            labels,
+            rendered: output,
+        })
+        .collect();
+    merge::combine_group(dest, &parts)
+}
+
+/// Compute the full write plan without touching disk (the test seam for [`run`]).
+pub async fn plan(options: &Options) -> crate::Result<Vec<PlannedWrite>> {
+    let context = load_context(options).await?;
+    let groups = group_members(&context)?;
     let mut plan = Vec::with_capacity(groups.len());
-    for (dest, indices) in &groups {
-        let parts: Vec<GroupPart<'_>> = indices
-            .iter()
-            .map(|&index| GroupPart {
-                template: rendered[index].name.as_str(),
-                labels: &rendered[index].labels,
-                rendered: &rendered[index].rendered,
-            })
-            .collect();
-        let content = merge::combine_group(dest, &parts)?;
+    for (dest, members) in &groups {
         plan.push(PlannedWrite {
             dest: dest.clone(),
-            content,
+            content: render_group(dest, members, &context)?,
         });
     }
     Ok(plan)
 }
 
-/// A rendered template plus its destination and provenance.
-struct RenderedTemplate {
-    name: String,
-    labels: BTreeSet<String>,
-    dest: PathBuf,
-    rendered: Rendered,
+/// Write every planned file atomically.
+pub(crate) fn write_plan(plan: &[PlannedWrite]) -> crate::Result<()> {
+    for write in plan {
+        atomic_write(&write.dest, &write.content)?;
+    }
+    Ok(())
 }
 
 /// Render one template with its project override into a [`Rendered`] output.
-fn render_template(
+pub(crate) fn render_template(
     template: &Template,
     name: &str,
     source_root: &Path,
