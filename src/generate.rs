@@ -1,7 +1,7 @@
-//! Generation orchestration, check/dry-run diffing, and back-propagation.
+//! Generation orchestration, check/dry-run diffing, and watch support.
 //!
-//! One-shot generation and `--check` (Milestone 3); watch mode (Milestone 4)
-//! and full two-way sync (Milestone 5) plug into [`run`] next.
+//! One-shot generation, `--check`, `--watch` (via [`crate::watch`]), and the
+//! pure render core backing back-propagation safety replays.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -15,7 +15,7 @@ use crate::merge::{self, EffectiveStrategy, GroupPart, Rendered};
 /// Options for [`run`], mirroring `templatry generate` flags.
 #[derive(Debug, Clone, Default)]
 pub struct Options {
-    /// Keep watching and regenerate on change (Milestone 4).
+    /// Keep watching and regenerate on change.
     pub watch: bool,
     /// Diff against disk without writing; exit 2 on difference.
     pub check: bool,
@@ -246,8 +246,8 @@ pub(crate) fn render_template(
 /// Render template and override text into a [`Rendered`] output.
 ///
 /// Pure over file contents: file IO, missing-override handling, and strategy
-/// resolution stay in [`render_template`]. Used directly by back-propagation
-/// safety replays (Milestone 5).
+/// resolution stay in [`render_template`]. Back-propagation safety replays
+/// call this directly.
 pub(crate) fn render_contents(
     template_text: &str,
     override_text: Option<&str>,

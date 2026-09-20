@@ -84,12 +84,7 @@ async fn run(cli: Cli) -> miette::Result<()> {
                 watch: cli.watch,
                 ..Default::default()
             };
-            match templatry::generate::run(&options).await {
-                Ok(()) => Ok(()),
-                // The differing paths are already printed; CI only needs the code.
-                Err(templatry::Error::CheckDifferences { .. }) => std::process::exit(2),
-                Err(other) => Err(other.into()),
-            }
+            run_generate(&options).await
         }
         Some(Commands::Generate {
             watch,
@@ -99,19 +94,14 @@ async fn run(cli: Cli) -> miette::Result<()> {
             offline,
         }) => {
             reject_bare_watch_flag(cli.watch)?;
-            let options = templatry::generate::Options {
+            run_generate(&templatry::generate::Options {
                 watch,
                 check,
                 dry_run,
                 config,
                 offline,
-            };
-            match templatry::generate::run(&options).await {
-                Ok(()) => Ok(()),
-                // The differing paths are already printed; CI only needs the code.
-                Err(templatry::Error::CheckDifferences { .. }) => std::process::exit(2),
-                Err(other) => Err(other.into()),
-            }
+            })
+            .await
         }
         Some(Commands::Validate { config }) => {
             reject_bare_watch_flag(cli.watch)?;
@@ -125,6 +115,17 @@ async fn run(cli: Cli) -> miette::Result<()> {
             templatry::source::cache_clear()?;
             Ok(())
         }
+    }
+}
+
+/// Run generation, mapping `--check` differences to exit code 2.
+///
+/// The differing paths are already printed; CI only needs the code.
+async fn run_generate(options: &templatry::generate::Options) -> miette::Result<()> {
+    match templatry::generate::run(options).await {
+        Ok(()) => Ok(()),
+        Err(templatry::Error::CheckDifferences { .. }) => std::process::exit(2),
+        Err(other) => Err(other.into()),
     }
 }
 

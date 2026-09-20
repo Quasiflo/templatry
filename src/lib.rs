@@ -142,4 +142,16 @@ mod tests {
             "not yet implemented: generate"
         );
     }
+
+    #[test]
+    fn line_column_counts_from_one() {
+        let content = "ab\ncde\n\nf";
+        assert_eq!(line_column(content, 0), (1, 1));
+        assert_eq!(line_column(content, 2), (1, 3));
+        assert_eq!(line_column(content, 3), (2, 1));
+        assert_eq!(line_column(content, 7), (3, 1));
+        assert_eq!(line_column(content, 8), (4, 1));
+        // Past-the-end offsets clamp instead of panicking.
+        assert_eq!(line_column(content, 100), (4, 2));
+    }
 }

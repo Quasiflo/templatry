@@ -399,7 +399,7 @@ fn fold_candidate(
     for op in ops {
         match op {
             DiffOp::Set { path, value } => {
-                if get_path(&template_value, path) == Some(value) {
+                if !path.is_empty() && get_path(&template_value, path) == Some(value) {
                     remove_path(&mut tentative, path)?;
                 } else {
                     set_path_strict(&mut tentative, path, value.clone())?;
@@ -426,7 +426,6 @@ fn fold_candidate(
 /// Pipeline errors (e.g. combine conflicts from a wrong attribution) reject
 /// the candidate. Zero passes fail loudly with a snapshot; several passes
 /// mean genuine ambiguity.
-#[allow(clippy::too_many_arguments)]
 fn try_candidates(
     dest: &Path,
     members: &[MemberView<'_>],
@@ -453,7 +452,7 @@ fn try_candidates(
             }
         };
         match safety_replay(candidate, members, &tentative, target) {
-            Ok(replay_bytes) => passing.push((candidate.name, tentative, replay_bytes)),
+            Ok(replay_bytes) => passing.push((candidate.name, tentative, replay_bytes, format)),
             Err(reason) => {
                 tracing::debug!(
                     template = candidate.name,
@@ -468,14 +467,8 @@ fn try_candidates(
             Err(mismatch_error(dest, &snapshot, generated_untouched))
         }
         1 => {
-            let (name, tentative, replay_bytes) = passing.pop().expect("one passing candidate");
-            let format = match try_candidate_format(members, name) {
-                Some(format) => format,
-                None => {
-                    let snapshot = write_snapshot(dest, target_bytes);
-                    return Err(mismatch_error(dest, &snapshot, generated_untouched));
-                }
-            };
+            let (name, tentative, replay_bytes, format) =
+                passing.pop().expect("one passing candidate");
             Ok(BackpropOutcome::Applied {
                 member: name.to_string(),
                 new_override_text: merge::serialize_doc(&tentative, format)?,
@@ -483,13 +476,12 @@ fn try_candidates(
             })
         }
         _ => {
-            let mut names: Vec<&str> = passing.iter().map(|(name, _, _)| *name).collect();
+            let mut names: Vec<&str> = passing.iter().map(|(name, _, _, _)| *name).collect();
             names.sort();
             Err(crate::invalid(
                 dest,
                 format!(
-                    "back propagation is ambiguous: the edit is reproducible through {} ({}): edit the override files directly to disambiguate",
-                    names.join(", "),
+                    "back propagation is ambiguous: the edit is reproducible through {}: edit the override files directly to disambiguate",
                     names
                         .iter()
                         .map(|name| format!("`{name}`"))
@@ -499,16 +491,6 @@ fn try_candidates(
             ))
         }
     }
-}
-
-fn try_candidate_format(members: &[MemberView<'_>], name: &str) -> Option<DocFormat> {
-    members
-        .iter()
-        .find(|member| member.name == name)
-        .and_then(|member| match member.strategy {
-            EffectiveStrategy::Structured(format) => Some(format),
-            _ => None,
-        })
 }
 
 /// Replay the full pipeline with a tentative override and compare.

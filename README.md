@@ -2,51 +2,160 @@
 
 Write Once, Use Everywhere!
 
-Templatry is a tool to template & distribute configuration files across your team's repositories. Currently, many files like linter & formatter settings, renovate manifest, gitignores and so much more are copy-pasted across numerous repositories, often with slight tweaks for each repo. Templatry lets you standardize your templates in a single source repository, and only commit overrides to your projects. Everything gets generated deterministically, updates when you bump your template version, and still gives you full per-project control to deviate how you need, without writing everything else from scratch every time.
+Templatry templates and distributes configuration files across your team's repositories. Linter and formatter settings, Renovate manifests, gitignores, and everything else that gets copy-pasted between repos (usually with slight per-repo tweaks) live once in a template source repository. Projects commit only small override files, and everything else generates deterministically. Bump the template version to roll out updates, while keeping full per-project control to deviate where needed.
 
-## Details
+## How It Works
 
-There's two locations where Templatry will run. In the template source repository (where all the template configs are stored) - here it's only job is to check the templatry.toml is valid. And in the project repository, where it will:
-- Retrieve template from specified location. Can be relative or absolute file path, github release, url etc. if download (not local path), gets cached in a user-wide folder for access across projects (location TBD, also discuss integrity checking in case modified between invocations). It's expected to be (unless local path) an archive containing a templatry.source.toml which specifies all the template files, merging strategy, etc.
+Two repositories take part:
 
-Main jobs:
+- A **template source repository** holds canonical configs plus a `templatry.source.toml` describing each template, its merge strategy, and its labels. Its only CI job is `templatry validate`.
+- A **project repository** holds a `.config/templatry.toml` pointing at a source plus small override files. Running `templatry generate` merges each template with its override and writes the generated files (`.config/generated/` by default).
 
-- Generate configuration files using template file, repository override files (must detect file changes and re-run also, and also re-run if templatary config file changes) and merge them using algorithm defined by template source config file.
-- Back-propagate changes to generated files into template overrides (certain configs)
-- Validate template repository setup
+```text
+template source repo               project repo
+templates/settings.json ──┐        .config/templatry.toml  (points at the source)
+templatry.source.toml     │        .config/settings.json  (override, optional)
+                          │                 │ merge
+                          └────────► .config/generated/settings.json
+```
 
-templatry.source.toml rough structure: (templatry.source.toml must be in root of archive)
+## Quick Start
+
+In your template source repository, add `templatry.source.toml`:
+
+```toml
+[templates.editor]
+template = "settings.json"
+labels = ["rust"]
+```
+
+In your project repository, add `.config/templatry.toml`:
+
+```toml
+[source]
+path = "templates"
+```
+
+Then generate, and keep a daemon running while you work:
+
+```sh
+templatry generate
+templatry generate --watch
+```
+
+## CLI Reference
+
+```sh
+templatry [OPTIONS] [COMMAND]   # bare run aliases generate
+templatry generate [--watch] [--check] [--dry-run] [--config <PATH>] [--offline]
+templatry validate [--config <PATH>]
+templatry cache clear
+templatry --watch               # alias for generate --watch
+```
+
+- `generate` writes every enabled template on every run (no change detection shortcuts). `--dry-run` prints planned writes instead; `--check` prints differing paths without writing and exits `2` (for CI and pre-commit hooks); `--offline` fails on cache misses instead of fetching. `--watch` reruns on file changes (see Watch Mode). `--check`, `--dry-run`, and `--watch` are mutually exclusive.
+- `validate` auto-detects context: with only `templatry.source.toml` present it validates the source; with only `.config/templatry.toml` (or `--config`) present it validates the project and the resolved source. Both files in one directory is an error.
+- `cache clear` flushes the whole template cache; the next run re-pulls everything.
+- Global flags: `-v`/`-vv` for more logs (`RUST_LOG` overrides), `-q` to silence non-error output.
+- Exit codes: `0` success (or no diff for `--check`), `1` runtime or validation failure, `2` differences found by `--check` (or CLI usage errors).
+
+## Project Configuration
+
+`.config/templatry.toml` holds one singular `[source]` table (multi-source projects are future work). Exactly one source kind is set per project. All project-relative paths (`path`, override dirs, generated dirs) resolve against the repository root.
+
+```toml
+# Local directory: used in place, never cached.
+[source]
+path = "../templates"
+
+# GitHub release asset: ref is the release tag, asset is a glob.
+[source]
+github = "myorg/team-configs"
+ref = "v1.2.3"
+asset = "configs_*.zip"
+
+# Generic URL archive.
+[source]
+url = "https://example.com/templates.tar.gz"
+
+# Git checkout: SSH by default, tags or full commit SHAs only.
+[source]
+git = "git@github.com:myorg/team-configs.git"
+ref = "v1.2.3"
+# use_https = true   # opt into HTTPS instead of SSH
+# root = "templates" # subdirectory holding templatry.source.toml
+```
+
+Rules: `ref` is required for GitHub and git kinds and rejected as meaningless for local and URL kinds. Branches are rejected and abbreviated SHAs fail (pin a tag or full 40-character SHA). Private GitHub sources read `TEMPLATRY_GITHUB_TOKEN`, falling back to ambient `GITHUB_TOKEN`/`GH_TOKEN`, for API and download requests only. Labels layer on top of the source defaults:
+
+```toml
+[source]
+path = "../templates"
+enable_labels = ["dart"]    # force these on
+disable_labels = ["legacy"] # force these off (wins ties)
+```
+
+Unknown labels are an error.
+
+## Source Configuration
+
+`templatry.source.toml` lives at the source root (or under `root`). Unknown keys are rejected everywhere, so typos fail fast.
 
 ```toml
 [configs]
-default_generated_dir # where to place generated configs by default. defaults to .config/generated
-default_override_dir # where to look for local overriding configs by default. defaults to .config/
+default_generated_dir = ".config/generated"
+default_override_dir = ".config/"
 
-[templates]
-whatever_config {
-    template = /some/path.json
-    override_file = whatever_config_2.json # Defaults to template file name
-    override_dir = /somewhere/expected_repo_override_path/ # defaults to default_override_dir
-    generated_file = whatever_resultant_config.json # Defaults to template file name
-    generated_dir = .config/elsewhere/ # defaults to default_generated_dir
-    strategy = append # how to merge template with override. for now, options are append (add override to end of file), json_merge, yaml_merge, toml_merge. We may want to discuss this more to incorporate deep vs shallow merge, etc or other options. Defaults to auto-detect on file extension.
-    back_propagate = false # default false, if true, watches the generated file for changes too, and back propagates them into the template overrides file such that when generator is rerun with updated template, the output is how it was modified to be
-    labels = { "javascript", "oxc" } # list of arbitrary labels to associate
-}
+[templates.editor]
+template = "settings.json"       # relative to the source root, must exist
+override_file = "settings.json"  # defaults to the template basename
+override_dir = ".config/"        # defaults to default_override_dir
+generated_file = "settings.json" # defaults to the template basename
+generated_dir = ".config/generated" # defaults to default_generated_dir
+strategy = "merge"               # merge | append_top | append_bottom | replace; default: auto-detect
+array_policy = "union"           # union | replace; default: union
+back_propagate = false           # watch generated edits back into the override
+labels = ["rust"]
 
 [default]
-include_labels # Mutually exclusive lists that either set up as default-disabled except these list
-exclude_labels # Or default-enabled-except-these. If nether is defined, everything is on by default. Empty enabled list disables everything by default.
+# include_labels = ["rust"]  # default-deny except these (empty disables everything)
+exclude_labels = ["legacy"]  # default-allow except these; mutually exclusive with include_labels
 ```
 
-templatry.toml rough structure: (templatry.toml must be in .config/templatry.toml)
+## Merge Strategies
 
-```toml
-[source.my_source_arbitrary_name]
-github = "some_gh_url"
-ref = "some_tag"
-enable_labels = # enable these labels on top of what source [default] sets up
-disable_labels =  # disable these labels on top of what source [default] sets up
-```
+Omitted `strategy` auto-detects on the generated filename: `json`, `jsonc`, `yaml`, `yml`, and `toml` merge structurally, everything else appends the override at the bottom.
 
-running templatry will generate configs, templatry --watch will continue watching files for changes to regenerate as needed.
+| Strategy        | Behavior |
+| --------------- | -------- |
+| (auto)          | Structured deep merge for known extensions, else `append_bottom` |
+| `merge`         | Structured deep merge (needs a structured extension) |
+| `append_top`    | Override bytes, newline, then template bytes |
+| `append_bottom` | Template bytes, newline, then override bytes |
+| `replace`       | Override file verbatim (missing override is an error) |
+
+Structured merge recurses through objects with the override winning; scalars and type mismatches replace. Arrays follow `array_policy`: `union` appends override items (scalars deduped, objects always appended, as in `smartworkspace`) while `replace` takes the override array wholesale. Setting a key to `_TEMPLATRY_DELETE_` in the override deletes it (value position only; document-root and in-array uses are errors). A missing or empty override file means the template passes through (except `replace`, which errors).
+
+Structured formats share a JSON intermediate representation: comments are dropped, output keys are sorted for stable diffs, JSONC comments are stripped on read, and TOML datetimes are rejected with the offending key path. Output is deterministic pretty-printed text with one trailing newline.
+
+## Labels
+
+Templates carry opaque labels (`rust`, `dart`, …). The source `[default]` section picks the base: `include_labels` means default-deny except listed, `exclude_labels` means default-allow except listed, neither means everything on. The project's `enable_labels`/`disable_labels` layer on top, with disables winning ties.
+
+## Shared Destinations
+
+Several templates may target the same generated file, so large multi-domain files (like `settings.json`) split across per-ecosystem fragments selected by labels. Combination is order-independent and additive: disjoint keys union, equal values pass, and any conflicting leaf fails naming the path, templates, labels, and both values. Arrays from several contributors must match exactly. `replace` and mixed structured/text strategies cannot share a destination (both are validation errors), as is back-propagation into a shared text destination.
+
+## Back-Propagation
+
+Templates with `back_propagate = true` are two-way in watch mode: hand-edits to the generated file fold back into the override, so the next template bump reproduces them. Additions and changes pin into the override (reverting to the template value cleans the pin back out); deleting a template-held key records `_TEMPLATRY_DELETE_`, while deleting an override-only key removes it.
+
+Every fold replays the template pipeline in memory and must reproduce the hand-edited file (key order ignored for structured formats, byte-exact for text) before anything is written. Mismatches fail loudly, leave both files untouched, and save the conflicting content under the system temp directory (`templatry-conflicts/`) for recovery; watch mode logs and keeps running. Known limits: array edits under `union` usually mismatch (the policy re-adds template items — use `replace` or edit the override), and text appends can only fold edits confined to the override portion. When a template update lands with a pending hand-edit, the template wins first and the captured diff reapplies onto the fresh output. One-shot `generate` never folds back: it overwrites hand-edits (and `--check` reports them).
+
+## Watch Mode
+
+`templatry generate --watch` writes the full plan once, then watches override files, the project config, and (for local sources) the source config. Override changes regenerate only their destination group; config changes reload everything and resubscribe (broken configs log and retry, never kill the watcher); `Ctrl-C` quits. Our own writes are guarded against echo loops.
+
+## Cache
+
+Downloaded sources live under the platform cache directory (`~/Library/Caches/templatry` on macOS, `$XDG_CACHE_HOME`/`~/.cache` on Linux) keyed by the SHA-256 of the normalized source configuration, so any source change fetches side by side with older pins and cache hits never touch the network. Entries older than 30 days prune automatically; `templatry cache clear` flushes everything (the remedy for stale plain-HTTP URLs, which cannot observe upstream movement). Cached content is trusted as-is: if you hand-modify it, clear and re-pull.

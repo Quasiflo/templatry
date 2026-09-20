@@ -147,7 +147,7 @@ pub(crate) fn source_id(source: &SourceRef, kind: SourceKind) -> crate::Result<S
         "kind": tag,
         "location": location.trim().trim_end_matches('/'),
         "ref": source.r#ref.as_deref().unwrap_or_default(),
-        "root": source.root.as_deref().unwrap_or_default().trim().trim_matches('/'),
+        "root": normalize_root(source.root.as_deref()),
         "asset": source.asset.as_deref().unwrap_or_default(),
         "use_https": source.use_https.unwrap_or(false),
     });
@@ -169,9 +169,22 @@ pub(crate) fn cache_root() -> PathBuf {
 
 /// Join the optional `root` subtree onto a fetched source base.
 fn join_root(base: &Path, root: Option<&str>) -> PathBuf {
-    match root.filter(|root| !root.trim().is_empty()) {
-        Some(root) => base.join(root.trim()),
-        None => base.to_path_buf(),
+    let normalized = normalize_root(root);
+    if normalized.is_empty() {
+        base.to_path_buf()
+    } else {
+        base.join(normalized)
+    }
+}
+
+/// Canonical `root` form: trimmed, unslashed, with `.` meaning the base.
+///
+/// Shared by the cache key and path resolution so equivalent spellings hit
+/// the same entry.
+fn normalize_root(root: Option<&str>) -> &str {
+    match root.map(str::trim).map(|root| root.trim_matches('/')) {
+        None | Some("") | Some(".") => "",
+        Some(root) => root,
     }
 }
 
@@ -180,10 +193,10 @@ fn ensure_source_file(root_dir: &Path, root: Option<&str>) -> crate::Result<()> 
     if root_dir.join(SOURCE_CONFIG_FILENAME).is_file() {
         return Ok(());
     }
-    let hint = root
-        .filter(|root| !root.trim().is_empty())
-        .map(|root| format!(" (with `root = \"{root}\"`)"))
-        .unwrap_or_default();
+    let hint = match normalize_root(root) {
+        "" => String::new(),
+        root => format!(" (with `root = \"{root}\"`)"),
+    };
     Err(crate::invalid(
         root_dir,
         format!("no `{SOURCE_CONFIG_FILENAME}` under the resolved source{hint}: check `root`"),
