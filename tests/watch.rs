@@ -76,7 +76,7 @@ fn all_watch_fixtures_are_known() {
                 .into_owned()
         })
         .collect();
-    assert_eq!(names, ["backprop", "basic"]);
+    assert_eq!(names, ["backprop", "backprop-ignore", "basic"]);
 }
 
 #[tokio::test]
@@ -198,6 +198,72 @@ async fn watch_backpropagates_generated_edits() {
         std::fs::read_to_string(&generated).expect("read generated"),
         broken
     );
+
+    task.abort();
+    let outcome = task.await.expect_err("abort cancels the task");
+    assert!(outcome.is_cancelled());
+}
+
+#[tokio::test]
+async fn watch_maintains_ignored_state() {
+    let (_temp, root) = common::setup_case("watch", "backprop-ignore");
+    let generated: PathBuf = root.join(".config").join("generated").join("app.json");
+    let override_file: PathBuf = root.join(".config").join("app.json");
+
+    let task = tokio::spawn(async move {
+        let options = options(&root);
+        templatry::watch::run(&options).await
+    });
+
+    poll_until(
+        &generated,
+        "{\n  \"keep\": 1,\n  \"locked\": {\n    \"x\": 1\n  },\n  \"val\": 1\n}\n",
+        "initial generate",
+    )
+    .await;
+    settle().await;
+
+    // Ignored-key edit plus a real edit: only the real one folds, and the
+    // generated file keeps the ignored value.
+    let edited = "{\n  \"keep\": 2,\n  \"locked\": {\n    \"x\": 99\n  },\n  \"val\": 1\n}\n";
+    std::fs::write(&generated, edited).expect("hand-edit generated");
+    poll_until(
+        &override_file,
+        "{\n  \"keep\": 2\n}\n",
+        "non-ignored edit folds, ignored edit does not",
+    )
+    .await;
+    assert_eq!(
+        std::fs::read_to_string(&generated).expect("read generated"),
+        edited
+    );
+    settle().await;
+
+    // Value change on a value-ignored key plus an addition: the addition
+    // folds, the value change is left alone.
+    let edited = "{\n  \"extra\": true,\n  \"keep\": 2,\n  \"locked\": {\n    \"x\": 99\n  },\n  \"val\": 42\n}\n";
+    std::fs::write(&generated, edited).expect("hand-edit generated");
+    poll_until(
+        &override_file,
+        "{\n  \"extra\": true,\n  \"keep\": 2\n}\n",
+        "addition folds, value change ignored",
+    )
+    .await;
+    assert_eq!(
+        std::fs::read_to_string(&generated).expect("read generated"),
+        edited
+    );
+    settle().await;
+
+    // Deleting a value-ignored key propagates (existence syncs).
+    let edited = "{\n  \"extra\": true,\n  \"keep\": 2,\n  \"locked\": {\n    \"x\": 99\n  }\n}\n";
+    std::fs::write(&generated, edited).expect("hand-edit generated");
+    poll_until(
+        &override_file,
+        "{\n  \"extra\": true,\n  \"keep\": 2,\n  \"val\": \"_TEMPLATRY_DELETE_\"\n}\n",
+        "deletion propagates",
+    )
+    .await;
 
     task.abort();
     let outcome = task.await.expect_err("abort cancels the task");

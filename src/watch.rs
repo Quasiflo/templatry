@@ -105,13 +105,7 @@ impl Cycle {
         let groups = generate::group_members(&context)?;
         let pending = capture_pending(&groups, &shared.tracker);
 
-        let mut plan = Vec::with_capacity(groups.len());
-        for (dest, members) in &groups {
-            plan.push(crate::generate::PlannedWrite {
-                dest: dest.clone(),
-                content: generate::render_group(dest, members, &context)?,
-            });
-        }
+        let plan = generate::render_plan(&context, &groups)?;
         generate::write_plan(&plan)?;
         {
             let mut tracker = lock_tracker(&shared.tracker);
@@ -246,8 +240,9 @@ fn regenerate(
             continue;
         };
         let content = generate::render_group(dest, members, context)?;
+        let content = generate::preserve_group(dest, &content, members)?;
         generate::write_plan(&[crate::generate::PlannedWrite {
-            dest: dest.to_path_buf(),
+            dest: dest.clone(),
             content: content.clone(),
         }])?;
         shared.guard.note_write(dest);
@@ -326,7 +321,7 @@ fn reapply_pending(
                 context,
                 members,
                 &member,
-                &new_override_text,
+                new_override_text,
                 dest,
                 &replay_bytes,
                 shared,
@@ -405,6 +400,25 @@ fn snapshot_members<'a>(
                 strategy: crate::merge::effective_strategy(&member.template, &generated_filename)?,
                 policy: member.template.array_policy,
                 back_propagate: member.template.back_propagate,
+                ignore_keys: parse_ignore_patterns(&member.template.backprop_ignore)?,
+                ignore_values: parse_ignore_patterns(&member.template.backprop_ignore_values)?,
+            })
+        })
+        .collect()
+}
+
+/// Parse ignore patterns (validated upstream; failures stay loud).
+fn parse_ignore_patterns(
+    patterns: &[String],
+) -> crate::Result<Vec<crate::backprop::IgnorePattern>> {
+    patterns
+        .iter()
+        .map(|pattern| {
+            crate::backprop::IgnorePattern::parse(pattern).map_err(|reason| {
+                crate::invalid(
+                    Path::new("templatry.source.toml"),
+                    format!("invalid ignore pattern `{pattern}`: {reason}"),
+                )
             })
         })
         .collect()
@@ -449,7 +463,7 @@ fn handle_backprop(
                 context,
                 members,
                 &member,
-                &new_override_text,
+                new_override_text,
                 dest,
                 &replay_bytes,
                 shared,
@@ -465,12 +479,13 @@ fn handle_backprop(
     Ok(())
 }
 
-/// Write a back-propagation result: override plus regenerated destination.
+/// Write a back-propagation result: override (unless unchanged) plus
+/// regenerated destination.
 fn apply_backprop(
     context: &ProjectContext,
     members: &[GroupMember],
     member: &str,
-    new_override_text: &str,
+    new_override_text: Option<String>,
     dest: &Path,
     replay_bytes: &[u8],
     shared: &Shared,
@@ -481,10 +496,12 @@ fn apply_backprop(
             format!("internal error: back-propagation winner `{member}` left its group"),
         ));
     };
-    let override_path = override_path_for(context, &winner.template)?;
-    generate::atomic_write(override_path.as_path(), new_override_text.as_bytes())?;
+    if let Some(text) = new_override_text {
+        let override_path = override_path_for(context, &winner.template)?;
+        generate::atomic_write(override_path.as_path(), text.as_bytes())?;
+        shared.guard.note_write(&override_path);
+    }
     generate::atomic_write(dest, replay_bytes)?;
-    shared.guard.note_write(&override_path);
     shared.guard.note_write(dest);
     lock_tracker(&shared.tracker)
         .entries
@@ -871,6 +888,8 @@ mod tests {
                 array_policy: crate::config::ArrayPolicy::Union,
                 back_propagate: true,
                 labels: Default::default(),
+                backprop_ignore: Vec::new(),
+                backprop_ignore_values: Vec::new(),
             },
         );
         let context = ProjectContext {

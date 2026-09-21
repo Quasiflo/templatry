@@ -116,6 +116,8 @@ strategy = "merge"               # merge | append_top | append_bottom | replace 
 array_policy = "union"           # union | replace; default: union
 back_propagate = false           # watch generated edits back into the override
 labels = ["rust"]
+# backprop_ignore = ["machine.sdk"]        # hand-edits here stay maintained (never fold, never overwritten)
+# backprop_ignore_values = ["editor.font"] # adds/deletes sync, value changes ignored
 
 [default]
 # include_labels = ["rust"]  # default-deny except these (empty disables everything)
@@ -150,6 +152,8 @@ Several templates may target the same generated file, so large multi-domain file
 ## Back-Propagation
 
 Templates with `back_propagate = true` are two-way in watch mode: hand-edits to the generated file fold back into the override, so the next template bump reproduces them. Additions and changes pin into the override (reverting to the template value cleans the pin back out); deleting a template-held key records `_TEMPLATRY_DELETE_`, while deleting an override-only key removes it.
+
+Per-template ignore lists carve out exceptions (both require `back_propagate`, structured strategies, and dot-separated paths where `*` matches one segment and every pattern covers its subtree): `backprop_ignore` keeps hand-edits fully maintained — never folded, never overwritten or removed on regen; `backprop_ignore_values` syncs existence (adds and deletes propagate) while leaving values alone.
 
 Every fold replays the template pipeline in memory and must reproduce the hand-edited file (key order ignored for structured formats, byte-exact for text) before anything is written. Mismatches fail loudly, leave both files untouched, and save the conflicting content under the system temp directory (`templatry-conflicts/`) for recovery; watch mode logs and keeps running. Known limits: array edits under `union` usually mismatch (the policy re-adds template items — use `replace` or edit the override), and text appends can only fold edits confined to the override portion. When a template update lands with a pending hand-edit, the template wins first and the captured diff reapplies onto the fresh output. One-shot `generate` never folds back: it overwrites hand-edits (and `--check` reports them).
 

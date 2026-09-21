@@ -1,0 +1,5 @@
+[templates.app]
+template = "app.json"
+back_propagate = true
+backprop_ignore = ["locked"]
+backprop_ignore_values = ["val"]

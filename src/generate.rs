@@ -164,14 +164,76 @@ pub(crate) fn render_group(
 pub async fn plan(options: &Options) -> crate::Result<Vec<PlannedWrite>> {
     let context = load_context(options).await?;
     let groups = group_members(&context)?;
+    render_plan(&context, &groups)
+}
+
+/// Render every destination group with forward preservation.
+///
+/// Shared by one-shot planning and watch cycles so both write identical bytes.
+pub(crate) fn render_plan(
+    context: &ProjectContext,
+    groups: &BTreeMap<PathBuf, Vec<GroupMember>>,
+) -> crate::Result<Vec<PlannedWrite>> {
     let mut plan = Vec::with_capacity(groups.len());
-    for (dest, members) in &groups {
+    for (dest, members) in groups {
+        let content = render_group(dest, members, context)?;
+        let content = preserve_group(dest, &content, members)?;
         plan.push(PlannedWrite {
             dest: dest.clone(),
-            content: render_group(dest, members, &context)?,
+            content,
         });
     }
     Ok(plan)
+}
+
+/// Apply forward preservation for a rendered group.
+///
+/// Groups without ignore lists pass through untouched. Otherwise the on-disk
+/// file, when present, supplies maintained state (see [`crate::backprop`]).
+pub(crate) fn preserve_group(
+    dest: &Path,
+    combined: &[u8],
+    members: &[GroupMember],
+) -> crate::Result<Vec<u8>> {
+    let mut keys = Vec::new();
+    let mut values = Vec::new();
+    let mut format = None;
+    for member in members {
+        for pattern in &member.template.backprop_ignore {
+            keys.push(parse_ignore_pattern(pattern)?);
+        }
+        for pattern in &member.template.backprop_ignore_values {
+            values.push(parse_ignore_pattern(pattern)?);
+        }
+        if format.is_none() {
+            let generated = member.template.resolved_generated_file()?;
+            if let crate::merge::EffectiveStrategy::Structured(found) =
+                crate::merge::effective_strategy(&member.template, &generated)?
+            {
+                format = Some(found);
+            }
+        }
+    }
+    let Some(format) = format else {
+        if keys.is_empty() && values.is_empty() {
+            return Ok(combined.to_vec());
+        }
+        return Err(crate::invalid(
+            dest,
+            "internal error: preserved group has no structured format".to_string(),
+        ));
+    };
+    crate::backprop::preserve_maintained(dest, combined, format, &keys, &values)
+}
+
+/// Parse an ignore pattern (validated upstream; failures stay loud).
+fn parse_ignore_pattern(pattern: &str) -> crate::Result<crate::backprop::IgnorePattern> {
+    crate::backprop::IgnorePattern::parse(pattern).map_err(|reason| {
+        crate::invalid(
+            Path::new("templatry.source.toml"),
+            format!("invalid ignore pattern `{pattern}`: {reason}"),
+        )
+    })
 }
 
 /// Write every planned file atomically.

@@ -378,6 +378,14 @@ pub struct Template {
     /// Watch the generated file and fold edits back into the override.
     #[serde(default)]
     pub back_propagate: bool,
+    /// Back-propagation ignore paths: hand-edits here stay maintained
+    /// (never folded, never overwritten). Requires `back_propagate`.
+    #[serde(default)]
+    pub backprop_ignore: Vec<String>,
+    /// Back-propagation value-ignore paths: adds/deletes sync, value changes
+    /// are left alone. Requires `back_propagate`.
+    #[serde(default)]
+    pub backprop_ignore_values: Vec<String>,
     /// Arbitrary labels for selection (e.g. `rust`, `dart`).
     #[serde(default)]
     pub labels: BTreeSet<String>,
@@ -641,6 +649,41 @@ impl Template {
                 display_path,
                 format!(
                     "[templates.{name}] `back_propagate` needs an override to fold into, but strategy `none` copies the template verbatim: disable `back_propagate` or use another strategy"
+                ),
+            ));
+        }
+        if !self.back_propagate
+            && (!self.backprop_ignore.is_empty() || !self.backprop_ignore_values.is_empty())
+        {
+            return Err(crate::invalid(
+                display_path,
+                format!(
+                    "[templates.{name}] `backprop_ignore`/`backprop_ignore_values` need `back_propagate = true`: enable it or remove the lists"
+                ),
+            ));
+        }
+        for pattern in self
+            .backprop_ignore
+            .iter()
+            .chain(self.backprop_ignore_values.iter())
+        {
+            if let Err(reason) = crate::backprop::IgnorePattern::parse(pattern) {
+                return Err(crate::invalid(
+                    display_path,
+                    format!("[templates.{name}] invalid ignore pattern `{pattern}`: {reason}"),
+                ));
+            }
+        }
+        if (!self.backprop_ignore.is_empty() || !self.backprop_ignore_values.is_empty())
+            && matches!(
+                crate::merge::family_of(self, &self.resolved_generated_file()?)?,
+                crate::merge::Family::Text
+            )
+        {
+            return Err(crate::invalid(
+                display_path,
+                format!(
+                    "[templates.{name}] `backprop_ignore`/`backprop_ignore_values` need a structured merge strategy (key paths are meaningless for text)"
                 ),
             ));
         }

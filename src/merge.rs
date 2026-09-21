@@ -605,6 +605,8 @@ mod tests {
             array_policy: ArrayPolicy::Union,
             back_propagate: false,
             labels: BTreeSet::new(),
+            backprop_ignore: Vec::new(),
+            backprop_ignore_values: Vec::new(),
         }
     }
 

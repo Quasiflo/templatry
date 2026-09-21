@@ -45,6 +45,7 @@ fn all_generate_fixtures_are_known() {
         [
             "json-merge",
             "labels",
+            "preserve-ignore",
             "replace-missing",
             "shared-conflict",
             "shared-destination",
@@ -99,6 +100,17 @@ async fn golden_template_select() {
         .expect("generate");
     common::assert_tree_matches(&root, &source_case("template-select").join("expected"));
     common::assert_absent(&root, &source_case("template-select"));
+}
+
+#[tokio::test]
+async fn golden_preserve_ignore() {
+    // The pre-existing generated file carries hand-maintained ignored state:
+    // one-shot generation must preserve it instead of overwriting.
+    let (_temp, root) = setup("preserve-ignore");
+    generate::run(&options(&root, |_| {}))
+        .await
+        .expect("generate");
+    common::assert_tree_matches(&root, &source_case("preserve-ignore").join("expected"));
 }
 
 #[tokio::test]
