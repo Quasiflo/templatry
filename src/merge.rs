@@ -599,6 +599,7 @@ mod tests {
             template: "app.json".to_string(),
             override_file: None,
             override_dir: None,
+            local_override_file: None,
             generated_file: None,
             generated_dir: None,
             strategy,

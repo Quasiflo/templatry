@@ -110,6 +110,7 @@ default_override_dir = ".config/"
 template = "settings.json"       # relative to the source root, must exist
 override_file = "settings.json"  # defaults to the template basename
 override_dir = ".config/"        # defaults to default_override_dir
+local_override_file = "settings.local.json" # optional third layer in override_dir (usually gitignored)
 generated_file = "settings.json" # defaults to the template basename
 generated_dir = ".config/generated" # defaults to default_generated_dir
 strategy = "merge"               # merge | append_top | append_bottom | replace | none; default: auto-detect
@@ -132,12 +133,12 @@ Omitted `strategy` auto-detects on the generated filename: `json`, `jsonc`, `yam
 | --------------- | -------- |
 | (auto)          | Structured deep merge for known extensions, else `append_bottom` |
 | `merge`         | Structured deep merge (needs a structured extension) |
-| `append_top`    | Override bytes, newline, then template bytes |
-| `append_bottom` | Template bytes, newline, then override bytes |
-| `replace`       | Override file verbatim (missing override is an error) |
+| `append_top`    | Precedence-ordered segments: local, override, template (missing layers skipped) |
+| `append_bottom` | Precedence-ordered segments: template, override, local (missing layers skipped) |
+| `replace`       | Override file verbatim (missing override is an error; local warns and is ignored) |
 | `none`          | Template file verbatim, ignoring any override (for licenses etc) |
 
-Structured merge recurses through objects with the override winning; scalars and type mismatches replace. Arrays follow `array_policy`: `union` appends override items (scalars deduped, objects always appended, as in `smartworkspace`) while `replace` takes the override array wholesale. Setting a key to `_TEMPLATRY_DELETE_` in the override deletes it (value position only; document-root and in-array uses are errors). A missing or empty override file means the template passes through (except `replace`, which errors).
+Structured merge recurses through objects with the override winning; scalars and type mismatches replace. A `local_override_file` (just a filename, resolved in the template's `override_dir`) adds a third layer on top for machine-local tweaks that are usually gitignored: it wins over the shared override, is skipped silently when missing, and is never written by back-propagation (which folds into the main override only). Arrays follow `array_policy`: `union` appends override items (scalars deduped, objects always appended, as in `smartworkspace`) while `replace` takes the override array wholesale. Setting a key to `_TEMPLATRY_DELETE_` in the override deletes it (value position only; document-root and in-array uses are errors). A missing or empty override file means the template passes through (except `replace`, which errors).
 
 Structured formats share a JSON intermediate representation: comments are dropped, output keys are sorted for stable diffs, JSONC comments are stripped on read, and TOML datetimes are rejected with the offending key path. Output is deterministic pretty-printed text with one trailing newline.
 
@@ -151,7 +152,7 @@ Several templates may target the same generated file, so large multi-domain file
 
 ## Back-Propagation
 
-Templates with `back_propagate = true` are two-way in watch mode: hand-edits to the generated file fold back into the override, so the next template bump reproduces them. Additions and changes pin into the override (reverting to the template value cleans the pin back out); deleting a template-held key records `_TEMPLATRY_DELETE_`, while deleting an override-only key removes it.
+Templates with `back_propagate = true` are two-way in watch mode: hand-edits to the generated file fold back into the override, so the next template bump reproduces them. Additions and changes pin into the override (reverting to the template value cleans the pin back out); deleting a template-held key records `_TEMPLATRY_DELETE_`, while deleting an override-only key removes it. With `local_override_file` set, folds target the main override only (cleanup decisions compare against template-plus-local), and safety replays include the local layer — edits to locally pinned keys fail loudly with a pointer to edit the local file instead.
 
 Per-template ignore lists carve out exceptions (both require `back_propagate`, structured strategies, and dot-separated paths where `*` matches one segment and every pattern covers its subtree): `backprop_ignore` keeps hand-edits fully maintained — never folded, never overwritten or removed on regen; `backprop_ignore_values` syncs existence (adds and deletes propagate) while leaving values alone.
 

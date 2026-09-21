@@ -342,15 +342,16 @@ fn reapply_pending(
     }
 }
 
-/// Owned template and override text for one member.
+/// Owned template, override, and local override text for one member.
 struct MemberFiles {
     template_text: String,
     override_text: Option<String>,
+    local_text: Option<String>,
 }
 
 /// Read fresh file contents for every group member.
 ///
-/// Whitespace-only overrides count as missing, matching generation.
+/// Whitespace-only files count as missing, matching generation.
 fn read_member_files(
     context: &ProjectContext,
     members: &[GroupMember],
@@ -361,25 +362,41 @@ fn read_member_files(
             let template_path = context.source_root.join(&member.template.template);
             let template_text = crate::read_file(&template_path)?;
             let override_path = override_path_for(context, &member.template)?;
-            let override_text = match std::fs::read(&override_path) {
-                Ok(bytes) if bytes.iter().all(u8::is_ascii_whitespace) => None,
-                Ok(bytes) => Some(String::from_utf8(bytes.to_vec()).map_err(|err| {
-                    crate::invalid(&override_path, format!("file is not valid UTF-8: {err}"))
-                })?),
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
-                Err(err) => {
-                    return Err(crate::invalid(
-                        &override_path,
-                        format!("cannot read override file: {err}"),
-                    ));
+            let override_text = read_layer(&override_path, "override file")?;
+            let local_text = match member
+                .template
+                .local_override_file
+                .as_deref()
+                .filter(|name| !name.trim().is_empty())
+            {
+                Some(name) => {
+                    let local_path = override_path
+                        .parent()
+                        .unwrap_or_else(|| Path::new("."))
+                        .join(name);
+                    read_layer(&local_path, "local override file")?
                 }
+                None => None,
             };
             Ok(MemberFiles {
                 template_text,
                 override_text,
+                local_text,
             })
         })
         .collect()
+}
+
+/// Read one optional layer file.
+fn read_layer(path: &Path, what: &str) -> crate::Result<Option<String>> {
+    match std::fs::read(path) {
+        Ok(bytes) if bytes.iter().all(u8::is_ascii_whitespace) => Ok(None),
+        Ok(bytes) => Ok(Some(String::from_utf8(bytes.to_vec()).map_err(|err| {
+            crate::invalid(path, format!("file is not valid UTF-8: {err}"))
+        })?)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(crate::invalid(path, format!("cannot read {what}: {err}"))),
+    }
 }
 
 /// Build borrowed back-propagation views over owned file snapshots.
@@ -397,6 +414,7 @@ fn snapshot_members<'a>(
                 labels: &member.labels,
                 template_text: file.template_text.as_str(),
                 override_text: file.override_text.as_deref(),
+                local_text: file.local_text.as_deref(),
                 strategy: crate::merge::effective_strategy(&member.template, &generated_filename)?,
                 policy: member.template.array_policy,
                 back_propagate: member.template.back_propagate,
@@ -569,9 +587,27 @@ impl Subscriptions {
             for member in members {
                 let override_path = override_path_for(context, &member.template)?;
                 overrides
-                    .entry(override_path)
+                    .entry(override_path.clone())
                     .or_default()
                     .push(dest_abs.clone());
+                if let Some(name) = member
+                    .template
+                    .local_override_file
+                    .as_deref()
+                    .filter(|name| !name.trim().is_empty())
+                {
+                    // Local layers feed their destination like overrides do.
+                    let local_path = absolute(
+                        &override_path
+                            .parent()
+                            .unwrap_or_else(|| Path::new("."))
+                            .join(name),
+                    );
+                    overrides
+                        .entry(local_path)
+                        .or_default()
+                        .push(dest_abs.clone());
+                }
                 if member.template.back_propagate {
                     watches_generated = true;
                 }
@@ -638,13 +674,29 @@ fn absolute(path: &Path) -> PathBuf {
     std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
-/// Same-file comparison robust to symlinks (macOS temp dirs) and deletions:
-/// canonicalize when possible, else compare absolute paths.
+/// Same-file comparison robust to symlinks (macOS temp dirs) and deletions.
+///
+/// Both sides canonicalized when possible; otherwise (e.g. deletion events
+/// for files that no longer exist) canonicalized parents plus file names are
+/// compared, so symlinked prefixes still match.
 fn same_file(left: &Path, right: &Path) -> bool {
-    match (left.canonicalize(), right.canonicalize()) {
-        (Ok(left), Ok(right)) => left == right,
+    if let (Ok(left), Ok(right)) = (left.canonicalize(), right.canonicalize()) {
+        return left == right;
+    }
+    match (parent_canonical(left), parent_canonical(right)) {
+        (Some((left_dir, left_name)), Some((right_dir, right_name))) => {
+            left_dir == right_dir && left_name == right_name
+        }
         _ => absolute(left) == absolute(right),
     }
+}
+
+/// Canonicalized parent plus raw file name, if the parent resolves.
+fn parent_canonical(path: &Path) -> Option<(PathBuf, std::ffi::OsString)> {
+    Some((
+        path.parent()?.canonicalize().ok()?,
+        path.file_name()?.to_os_string(),
+    ))
 }
 
 // ---- Dispatch ---------------------------------------------------------------
@@ -882,6 +934,7 @@ mod tests {
                 template: "app.json".to_string(),
                 override_file: None,
                 override_dir: None,
+                local_override_file: None,
                 generated_file: None,
                 generated_dir: None,
                 strategy: None,

@@ -33,6 +33,8 @@ pub struct MemberView<'a> {
     pub template_text: &'a str,
     /// Current override file text (`None` when missing).
     pub override_text: Option<&'a str>,
+    /// Current local override text (`None` when unset or missing).
+    pub local_text: Option<&'a str>,
     /// Resolved strategy.
     pub strategy: EffectiveStrategy,
     /// Merge policy for structured strategies.
@@ -175,6 +177,7 @@ pub fn backpropagate(
             )?;
             let tentative = fold_text(
                 candidates[0].template_text,
+                candidates[0].local_text,
                 &current,
                 text,
                 candidates[0].name,
@@ -234,6 +237,7 @@ pub fn reapply(
             let captured = decode(captured_bytes, dest, "hand-edited content must be UTF-8")?;
             let tentative = fold_text(
                 candidates[0].template_text,
+                candidates[0].local_text,
                 &captured,
                 text,
                 candidates[0].name,
@@ -602,9 +606,9 @@ fn restore_into(
 
 /// Fold operations into one candidate's override.
 ///
-/// Changed values matching the (new) template are cleaned out of the override
-/// instead of pinned, so future template bumps flow through; deleted keys the
-/// template still defines become `{DELETE_MARKER}`, others are removed.
+/// Decisions run against the base layer (`merge(template, local)`), so the
+/// local file behaves as part of the template: reverting to a local value
+/// cleans the override pin, and deletions consult base membership.
 fn fold_candidate(
     candidate: &MemberView<'_>,
     format: DocFormat,
@@ -623,17 +627,28 @@ fn fold_candidate(
         format,
         &format!("template `{}`", candidate.name),
     )?;
+    let base_value = match candidate.local_text {
+        Some(text) => {
+            let local = merge::parse_doc(
+                text,
+                format,
+                &format!("local override for template `{}`", candidate.name),
+            )?;
+            merge::merge_structured(template_value, local, candidate.policy, candidate.name)?
+        }
+        None => template_value,
+    };
     for op in ops {
         match op {
             DiffOp::Set { path, value, .. } => {
-                if !path.is_empty() && get_path(&template_value, path) == Some(value) {
+                if !path.is_empty() && get_path(&base_value, path) == Some(value) {
                     remove_path(&mut tentative, path)?;
                 } else {
                     set_path_strict(&mut tentative, path, value.clone())?;
                 }
             }
             DiffOp::Delete { path } => {
-                if get_path(&template_value, path).is_some() {
+                if get_path(&base_value, path).is_some() {
                     set_path_strict(
                         &mut tentative,
                         path,
@@ -738,7 +753,14 @@ fn try_candidates(
     match passing.len() {
         0 => {
             let snapshot = write_snapshot(dest, target.user_bytes);
-            Err(mismatch_error(dest, &snapshot, generated_untouched))
+            Err(mismatch_error(
+                dest,
+                &snapshot,
+                generated_untouched,
+                candidates
+                    .iter()
+                    .any(|candidate| candidate.local_text.is_some()),
+            ))
         }
         1 => {
             let (name, new_override_text, replay_bytes) =
@@ -835,6 +857,7 @@ fn safety_replay(
         let rendered = crate::generate::render_contents(
             member.template_text,
             text,
+            member.local_text,
             member.strategy,
             member.policy,
             member.name,
@@ -868,40 +891,56 @@ fn safety_replay(
 /// Fold a hand-edit into a text override.
 ///
 /// `replace` takes the content verbatim; `append_*` strips the known template
-/// portion (template-region edits fail loudly instead of misattributing).
+/// and local portions to recover the middle override segment (edits outside
+/// it fail loudly instead of misattributing).
 fn fold_text(
     template_text: &str,
+    local_text: Option<&str>,
     current: &str,
     strategy: EffectiveStrategy,
     name: &str,
     dest: &Path,
 ) -> crate::Result<String> {
+    /// Strip one separator-joined segment off a side.
+    fn strip_segment<'a>(text: &'a str, segment: &str, prefix: bool) -> Option<&'a str> {
+        if prefix {
+            text.strip_prefix(segment)
+                .and_then(|rest| rest.strip_prefix('\n').or(Some(rest)))
+        } else {
+            text.strip_suffix(segment)
+                .and_then(|rest| rest.strip_suffix('\n').or(Some(rest)))
+        }
+    }
+    let attribution = || {
+        crate::invalid(
+            dest,
+            format!(
+                "template `{name}`: the edit touches outside the override portion of the file, which cannot fold back: edit the override file directly"
+            ),
+        )
+    };
     match strategy {
         EffectiveStrategy::Replace => Ok(current.to_string()),
-        EffectiveStrategy::AppendBottom => current
-            .strip_prefix(template_text)
-            .and_then(|rest| rest.strip_prefix('\n').or(Some(rest)))
-            .map(str::to_string)
-            .ok_or_else(|| {
-                crate::invalid(
-                    dest,
-                    format!(
-                        "template `{name}`: the edit touches the template portion of an `append_bottom` file, which cannot fold back: edit the override file directly"
-                    ),
-                )
-            }),
-        EffectiveStrategy::AppendTop => current
-            .strip_suffix(template_text)
-            .and_then(|rest| rest.strip_suffix('\n').or(Some(rest)))
-            .map(str::to_string)
-            .ok_or_else(|| {
-                crate::invalid(
-                    dest,
-                    format!(
-                        "template `{name}`: the edit touches the template portion of an `append_top` file, which cannot fold back: edit the override file directly"
-                    ),
-                )
-            }),
+        EffectiveStrategy::AppendBottom => {
+            // template \n override [\n local]: strip the template head, then
+            // the local tail when a local file exists.
+            let mut rest = strip_segment(current, template_text, true).ok_or_else(attribution)?;
+            if let Some(local) = local_text {
+                rest = strip_segment(rest, local, false).ok_or_else(attribution)?;
+            }
+            Ok(rest.to_string())
+        }
+        EffectiveStrategy::AppendTop => {
+            // [local \n] override \n template: strip the local head when a
+            // local file exists, then the template tail.
+            let mut rest = current;
+            if let Some(local) = local_text {
+                rest = strip_segment(rest, local, true).ok_or_else(attribution)?;
+            }
+            Ok(strip_segment(rest, template_text, false)
+                .ok_or_else(attribution)?
+                .to_string())
+        }
         EffectiveStrategy::Structured(_) => Err(crate::invalid(
             dest,
             "internal error: text fold called for a structured template".to_string(),
@@ -926,6 +965,7 @@ fn replay_text(
     let rendered = crate::generate::render_contents(
         candidate.template_text,
         Some(tentative),
+        candidate.local_text,
         candidate.strategy,
         candidate.policy,
         candidate.name,
@@ -936,7 +976,12 @@ fn replay_text(
             "back-propagation replay rejected: {err}"
         );
         let snapshot = write_snapshot(dest, target_bytes);
-        mismatch_error(dest, &snapshot, generated_untouched)
+        mismatch_error(
+            dest,
+            &snapshot,
+            generated_untouched,
+            candidate.local_text.is_some(),
+        )
     })?;
     match rendered {
         merge::Rendered::Text(bytes) if bytes.as_bytes() == target_bytes => {
@@ -950,7 +995,12 @@ fn replay_text(
         }
         _ => {
             let snapshot = write_snapshot(dest, target_bytes);
-            Err(mismatch_error(dest, &snapshot, generated_untouched))
+            Err(mismatch_error(
+                dest,
+                &snapshot,
+                generated_untouched,
+                candidate.local_text.is_some(),
+            ))
         }
     }
 }
@@ -981,16 +1031,26 @@ pub(crate) fn write_snapshot(dest: &Path, content: &[u8]) -> PathBuf {
 }
 
 /// Loud safety-mismatch error naming the recovery snapshot.
-fn mismatch_error(dest: &Path, snapshot: &Path, generated_untouched: bool) -> crate::Error {
+fn mismatch_error(
+    dest: &Path,
+    snapshot: &Path,
+    generated_untouched: bool,
+    local_involved: bool,
+) -> crate::Error {
     let state = if generated_untouched {
         "both files left untouched"
     } else {
         "template output kept"
     };
+    let local_hint = if local_involved {
+        " A local override file is also in play: keys it defines always win over the shared override, so edits to those keys cannot fold back — edit the local file itself instead."
+    } else {
+        ""
+    };
     crate::invalid(
         dest,
         format!(
-            "back propagation safety check failed: replaying the computed override through the template does not reproduce the generated file ({state}). Common cause: array edits under `array_policy = \"union\"`, which re-adds template items — switch the template to `\"replace\"` or edit the override directly. Conflicting generated content saved to `{}`",
+            "back propagation safety check failed: replaying the computed override through the template does not reproduce the generated file ({state}). Common cause: array edits under `array_policy = \"union\"`, which re-adds template items — switch the template to `\"replace\"` or edit the override directly.{local_hint} Conflicting generated content saved to `{}`",
             snapshot.display()
         ),
     )
@@ -1011,11 +1071,30 @@ mod tests {
         override_text: Option<&'a str>,
         strategy: EffectiveStrategy,
     ) -> MemberView<'a> {
+        local_member(
+            name,
+            label_set,
+            template_text,
+            override_text,
+            None,
+            strategy,
+        )
+    }
+
+    fn local_member<'a>(
+        name: &'a str,
+        label_set: &'a BTreeSet<String>,
+        template_text: &'a str,
+        override_text: Option<&'a str>,
+        local_text: Option<&'a str>,
+        strategy: EffectiveStrategy,
+    ) -> MemberView<'a> {
         MemberView {
             name,
             labels: label_set,
             template_text,
             override_text,
+            local_text,
             strategy,
             policy: ArrayPolicy::Union,
             back_propagate: true,
@@ -1287,7 +1366,10 @@ mod tests {
         )];
         let err = backpropagate(Path::new("out.txt"), b"TEMPLATRY\n", b"CHANGED\n", &members)
             .unwrap_err();
-        assert!(err.to_string().contains("template portion"), "{err:?}");
+        assert!(
+            err.to_string().contains("outside the override portion"),
+            "{err:?}"
+        );
     }
 
     #[test]
@@ -1345,6 +1427,32 @@ mod tests {
     }
 
     #[test]
+    fn edit_to_local_pinned_key_fails_loudly() {
+        // The local layer always outranks the override, so no override
+        // content can reproduce shared=40 while local pins 30: loud error
+        // pointing at the local file, both files untouched.
+        let labels = labels(&["rust"]);
+        let last = last_of_three(
+            "{\"a\": 1, \"shared\": 1}",
+            Some("{\"shared\": 20}"),
+            "{\"local\": true, \"shared\": 30}",
+        );
+        let current = b"{\n  \"a\": 1,\n  \"local\": true,\n  \"shared\": 40\n}\n";
+        let members = [local_member(
+            "app",
+            &labels,
+            "{\"a\": 1, \"shared\": 1}",
+            Some("{\"shared\": 20}"),
+            Some("{\"local\": true, \"shared\": 30}"),
+            EffectiveStrategy::Structured(DocFormat::Json),
+        )];
+        let err = backpropagate(Path::new("out.json"), &last, current, &members).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("safety check failed"), "{message}");
+        assert!(message.contains("local override file"), "{message}");
+    }
+
+    #[test]
     fn snapshot_file_is_written() {
         let dir = tempfile::tempdir().expect("tempdir");
         let dest = dir.path().join("settings.json");
@@ -1353,6 +1461,204 @@ mod tests {
         assert_eq!(std::fs::read(&path).unwrap(), b"{}");
         let name = path.file_name().expect("name").to_string_lossy();
         assert!(name.starts_with("settings.") && name.contains(".conflict.json"));
+    }
+
+    fn last_of_three(
+        template_text: &str,
+        override_text: Option<&str>,
+        local_text: &str,
+    ) -> Vec<u8> {
+        let base = parse(template_text);
+        let merged = match override_text {
+            Some(text) => {
+                merge::merge_structured(base, parse(text), ArrayPolicy::Union, "t").unwrap()
+            }
+            None => base,
+        };
+        let merged =
+            merge::merge_structured(merged, parse(local_text), ArrayPolicy::Union, "t").unwrap();
+        merge::serialize_doc(&merged, DocFormat::Json)
+            .unwrap()
+            .into_bytes()
+    }
+
+    #[test]
+    fn local_layer_flows_into_safety_replay() {
+        let labels = labels(&["rust"]);
+        let last = last_of_three(
+            "{\"a\": 1, \"b\": 1}",
+            Some("{\"b\": 2}"),
+            "{\"b\": 3, \"c\": 9}",
+        );
+        let current = b"{\"a\": 10, \"b\": 3, \"c\": 9}\n";
+        let members = [local_member(
+            "app",
+            &labels,
+            "{\"a\": 1, \"b\": 1}",
+            Some("{\"b\": 2}"),
+            Some("{\"b\": 3, \"c\": 9}"),
+            EffectiveStrategy::Structured(DocFormat::Json),
+        )];
+        let outcome = backpropagate(Path::new("out.json"), &last, current, &members).unwrap();
+        let (member, override_text, replay) = applied_override(outcome);
+        assert_eq!(member, "app");
+        // Fold targets the main override; the local layer is untouched.
+        assert_eq!(parse(&override_text), parse("{\"a\": 10, \"b\": 2}"));
+        assert_eq!(
+            parse(std::str::from_utf8(&replay).unwrap()),
+            parse("{\"a\": 10, \"b\": 3, \"c\": 9}")
+        );
+    }
+
+    #[test]
+    fn revert_to_local_value_cleans_override() {
+        // The edit matches a newly added local value: folding pins nothing,
+        // and the replay still reproduces the file through the local layer.
+        let labels = labels(&["rust"]);
+        let last = last_of("{\"k\": 1}", Some("{\"k\": 2}"));
+        let current = b"{\"k\": 3}\n";
+        let members = [local_member(
+            "app",
+            &labels,
+            "{\"k\": 1}",
+            Some("{\"k\": 2}"),
+            Some("{\"k\": 3}"),
+            EffectiveStrategy::Structured(DocFormat::Json),
+        )];
+        let outcome = backpropagate(Path::new("out.json"), &last, current, &members).unwrap();
+        let (_, text, replay) = applied_override(outcome);
+        assert_eq!(parse(&text), parse("{}"));
+        assert_eq!(
+            parse(std::str::from_utf8(&replay).unwrap()),
+            parse("{\"k\": 3}")
+        );
+    }
+
+    #[test]
+    fn delete_local_held_key_fails_loudly() {
+        // The local layer always re-adds the key, so no override content can
+        // reproduce the deletion: the safety check must fail, not silently pass.
+        let labels = labels(&["rust"]);
+        let last = last_of_three("{\"a\": 1}", None, "{\"d\": 1}");
+        let current = b"{\"a\": 1}\n";
+        let members = [local_member(
+            "app",
+            &labels,
+            "{\"a\": 1}",
+            None,
+            Some("{\"d\": 1}"),
+            EffectiveStrategy::Structured(DocFormat::Json),
+        )];
+        let err = backpropagate(Path::new("out.json"), &last, current, &members).unwrap_err();
+        assert!(err.to_string().contains("safety check failed"), "{err:?}");
+    }
+
+    #[test]
+    fn shared_local_scopes_to_its_contributor() {
+        let rust = labels(&["rust"]);
+        let dart = labels(&["dart"]);
+        let rust_last = parse("{\"x\": 1, \"lx\": 1}");
+        let dart_last = parse("{\"y\": 1}");
+        let combined = {
+            let contributions = [
+                merge::Contribution {
+                    template: "a",
+                    labels: &rust,
+                    value: rust_last,
+                },
+                merge::Contribution {
+                    template: "b",
+                    labels: &dart,
+                    value: dart_last,
+                },
+            ];
+            merge::serialize_doc(
+                &merge::combine_structured(&contributions).unwrap(),
+                DocFormat::Json,
+            )
+            .unwrap()
+            .into_bytes()
+        };
+        let current = b"{\"lx\": 1, \"x\": 2, \"y\": 1}\n";
+        let members = [
+            local_member(
+                "a",
+                &rust,
+                "{\"x\": 1}",
+                None,
+                Some("{\"lx\": 1}"),
+                EffectiveStrategy::Structured(DocFormat::Json),
+            ),
+            json_member("b", &dart, "{\"y\": 1}", None),
+        ];
+        let outcome = backpropagate(Path::new("out.json"), &combined, current, &members).unwrap();
+        let (member, text, _) = applied_override(outcome);
+        assert_eq!(member, "a");
+        assert_eq!(parse(&text), parse("{\"x\": 2}"));
+    }
+
+    #[test]
+    fn append_three_layer_fold_recovers_middle() {
+        let labels = labels(&[]);
+        let members = [local_member(
+            "banner",
+            &labels,
+            "T\n",
+            Some("O\n"),
+            Some("L\n"),
+            EffectiveStrategy::AppendBottom,
+        )];
+        let last = b"T\n\nO\n\nL\n";
+        let current = b"T\n\nO2\n\nL\n";
+        let outcome = backpropagate(Path::new("out.txt"), last, current, &members).unwrap();
+        let (_, text, replay) = applied_override(outcome);
+        assert_eq!(text, "O2\n");
+        assert_eq!(replay, current);
+    }
+
+    #[test]
+    fn append_local_region_edit_fails() {
+        let labels = labels(&[]);
+        let members = [local_member(
+            "banner",
+            &labels,
+            "T\n",
+            Some("O\n"),
+            Some("L\n"),
+            EffectiveStrategy::AppendBottom,
+        )];
+        let last = b"T\n\nO\n\nL\n";
+        let err = backpropagate(Path::new("out.txt"), last, b"T\n\nO\n\nCHANGED\n", &members)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("outside the override portion"),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn reapply_with_local_survives_template_bump() {
+        let labels = labels(&["rust"]);
+        let last = last_of_three("{\"k\": 1}", None, "{\"u\": 9}");
+        let captured = b"{\"k\": 2, \"u\": 9}\n";
+        let template_new = "{\"k\": 1, \"u\": \"new\"}";
+        let forward = last_of_three(template_new, None, "{\"u\": 9}");
+        let members = [local_member(
+            "app",
+            &labels,
+            template_new,
+            None,
+            Some("{\"u\": 9}"),
+            EffectiveStrategy::Structured(DocFormat::Json),
+        )];
+        let outcome = reapply(Path::new("out.json"), &last, captured, &forward, &members).unwrap();
+        let (member, text, replay) = applied_override(outcome);
+        assert_eq!(member, "app");
+        assert_eq!(parse(&text), parse("{\"k\": 2}"));
+        assert_eq!(
+            parse(std::str::from_utf8(&replay).unwrap()),
+            parse("{\"k\": 2, \"u\": 9}")
+        );
     }
 
     fn pattern(text: &str) -> IgnorePattern {

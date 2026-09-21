@@ -45,6 +45,7 @@ fn all_generate_fixtures_are_known() {
         [
             "json-merge",
             "labels",
+            "local-chain",
             "preserve-ignore",
             "replace-missing",
             "shared-conflict",
@@ -164,4 +165,13 @@ async fn dry_run_writes_nothing() {
         .await
         .expect("dry run");
     assert!(!root.join(".config").join("generated").exists());
+}
+
+#[tokio::test]
+async fn golden_local_chain() {
+    let (_temp, root) = setup("local-chain");
+    generate::run(&options(&root, |_| {}))
+        .await
+        .expect("generate");
+    common::assert_tree_matches(&root, &source_case("local-chain").join("expected"));
 }

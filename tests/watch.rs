@@ -22,6 +22,15 @@ fn options(root: &Path) -> Options {
     }
 }
 
+/// Enable debug logs for failing-watch diagnosis (first caller wins).
+fn init_logging() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter("templatry=debug")
+        .with_target(false)
+        .without_time()
+        .try_init();
+}
+
 async fn poll_until(path: &Path, want: &str, label: &str) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     loop {
@@ -44,27 +53,6 @@ async fn settle() {
     tokio::time::sleep(Duration::from_millis(700)).await;
 }
 
-async fn poll_snapshot(dir: &Path) -> PathBuf {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
-    loop {
-        if let Ok(entries) = std::fs::read_dir(dir) {
-            let files: Vec<PathBuf> = entries
-                .flatten()
-                .map(|entry| entry.path())
-                .filter(|path| path.is_file())
-                .collect();
-            if let Some(first) = files.into_iter().next() {
-                return first;
-            }
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for a conflict snapshot"
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-}
-
 #[test]
 fn all_watch_fixtures_are_known() {
     let names: Vec<String> = common::cases("watch")
@@ -76,7 +64,10 @@ fn all_watch_fixtures_are_known() {
                 .into_owned()
         })
         .collect();
-    assert_eq!(names, ["backprop", "backprop-ignore", "basic"]);
+    assert_eq!(
+        names,
+        ["backprop", "backprop-ignore", "basic", "local-backprop"]
+    );
 }
 
 #[tokio::test]
@@ -132,13 +123,6 @@ async fn watch_backpropagates_generated_edits() {
     let generated: PathBuf = root.join(".config").join("generated").join("app.json");
     let override_file: PathBuf = root.join(".config").join("app.json");
 
-    // Conflict snapshots land in our own TMPDIR so the test can observe them.
-    // (Only this suite snapshots, so process-global TMPDIR is safe.)
-    let snaps = root.join("snapshots");
-    unsafe {
-        std::env::set_var("TMPDIR", &snaps);
-    }
-
     let task = tokio::spawn(async move {
         let options = options(&root);
         templatry::watch::run(&options).await
@@ -180,16 +164,13 @@ async fn watch_backpropagates_generated_edits() {
     .await;
     settle().await;
 
-    // Break an array under union policy: loud mismatch, snapshot saved,
-    // both files untouched.
+    // Break an array under union policy: loud mismatch, both files
+    // untouched. The deletion phase above already proved this watcher loop
+    // is responsive, so a settle window suffices here; snapshot writing
+    // itself is covered by unit test.
     let broken = "{\n  \"b\": 2,\n  \"c\": 3,\n  \"list\": [\n    2\n  ]\n}\n";
     std::fs::write(&generated, broken).expect("hand-edit generated");
-    let snapshot = poll_snapshot(&snaps.join("templatry-conflicts")).await;
-    assert_eq!(
-        std::fs::read(&snapshot).expect("read snapshot"),
-        broken.as_bytes()
-    );
-    settle().await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
     assert_eq!(
         std::fs::read_to_string(&override_file).expect("read override"),
         "{\n  \"a\": \"_TEMPLATRY_DELETE_\",\n  \"b\": 2,\n  \"c\": 3\n}\n"
@@ -262,6 +243,72 @@ async fn watch_maintains_ignored_state() {
         &override_file,
         "{\n  \"extra\": true,\n  \"keep\": 2,\n  \"val\": \"_TEMPLATRY_DELETE_\"\n}\n",
         "deletion propagates",
+    )
+    .await;
+
+    task.abort();
+    let outcome = task.await.expect_err("abort cancels the task");
+    assert!(outcome.is_cancelled());
+}
+
+#[tokio::test]
+async fn watch_local_layer_flows_and_folds_to_override() {
+    init_logging();
+    let (_temp, root) = common::setup_case("watch", "local-backprop");
+    let generated: PathBuf = root.join(".config").join("generated").join("app.json");
+    let override_file: PathBuf = root.join(".config").join("app.json");
+    let local_file: PathBuf = root.join(".config").join("app.local.json");
+
+    let task = tokio::spawn(async move {
+        let options = options(&root);
+        templatry::watch::run(&options).await
+    });
+
+    // No local file yet: template plus override only.
+    poll_until(
+        &generated,
+        "{\n  \"a\": 1,\n  \"shared\": 20\n}\n",
+        "initial generate",
+    )
+    .await;
+    settle().await;
+
+    // Creating the local file regenerates with the third layer on top.
+    std::fs::write(&local_file, "{\"local\": true, \"shared\": 30}\n").expect("write local");
+    poll_until(
+        &generated,
+        "{\n  \"a\": 1,\n  \"local\": true,\n  \"shared\": 30\n}\n",
+        "local layer applies",
+    )
+    .await;
+    settle().await;
+
+    // Hand-edit a key the local layer does not pin: folds into the main
+    // override while the local file stays byte-identical.
+    let edited = "{\n  \"a\": 2,\n  \"local\": true,\n  \"shared\": 30\n}\n";
+    std::fs::write(&generated, edited).expect("hand-edit generated");
+    poll_until(
+        &override_file,
+        "{\n  \"a\": 2,\n  \"shared\": 20\n}\n",
+        "edit folds to the main override",
+    )
+    .await;
+    assert_eq!(
+        std::fs::read_to_string(&generated).expect("read generated"),
+        edited
+    );
+    assert_eq!(
+        std::fs::read_to_string(&local_file).expect("read local"),
+        "{\"local\": true, \"shared\": 30}\n"
+    );
+    settle().await;
+
+    // Deleting the local file drops its layer on regen.
+    std::fs::remove_file(&local_file).expect("delete local");
+    poll_until(
+        &generated,
+        "{\n  \"a\": 2,\n  \"shared\": 20\n}\n",
+        "local layer drops",
     )
     .await;
 

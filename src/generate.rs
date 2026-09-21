@@ -257,24 +257,30 @@ pub(crate) fn render_template(
     let generated_filename = template.resolved_generated_file()?;
     let strategy = merge::effective_strategy(template, &generated_filename)?;
 
-    let override_path = project_root
-        .join(template.resolved_override_dir(configs))
-        .join(template.resolved_override_file()?);
-    let override_bytes = match std::fs::read(&override_path) {
-        Ok(bytes) if bytes.iter().all(u8::is_ascii_whitespace) => None,
-        Ok(bytes) => Some(bytes),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
-        Err(err) => {
-            return Err(crate::invalid(
-                &override_path,
-                format!("cannot read override file: {err}"),
-            ));
+    let override_dir = project_root.join(template.resolved_override_dir(configs));
+    let override_path = override_dir.join(template.resolved_override_file()?);
+    let override_text = match read_optional(&override_path, "override file")? {
+        Some(bytes) => Some(decode(&bytes, &override_path)?),
+        None => None,
+    };
+    let local_text = match template
+        .local_override_file
+        .as_deref()
+        .filter(|name| !name.trim().is_empty())
+    {
+        Some(name) => {
+            let local_path = override_dir.join(name);
+            match read_optional(&local_path, "local override file")? {
+                Some(bytes) => Some(decode(&bytes, &local_path)?),
+                None => None,
+            }
         }
+        None => None,
     };
 
     match strategy {
         EffectiveStrategy::Replace => {
-            let Some(bytes) = override_bytes else {
+            let Some(text) = override_text else {
                 return Err(crate::invalid(
                     &override_path,
                     format!(
@@ -282,17 +288,20 @@ pub(crate) fn render_template(
                     ),
                 ));
             };
-            Ok(Rendered::Text(decode(&bytes, &override_path)?))
+            if local_text.is_some() {
+                tracing::warn!(
+                    template = name,
+                    "local override ignored: strategy `replace` emits the override verbatim"
+                );
+            }
+            Ok(Rendered::Text(text))
         }
         _ => {
             let template_text = decode(&template_bytes, &template_path)?;
-            let override_text = match override_bytes {
-                Some(bytes) => Some(decode(&bytes, &override_path)?),
-                None => None,
-            };
             render_contents(
                 &template_text,
                 override_text.as_deref(),
+                local_text.as_deref(),
                 strategy,
                 template.array_policy,
                 name,
@@ -301,14 +310,25 @@ pub(crate) fn render_template(
     }
 }
 
-/// Render template and override text into a [`Rendered`] output.
+/// Read an optional layer file: missing or whitespace-only means absent.
+fn read_optional(path: &Path, what: &str) -> crate::Result<Option<Vec<u8>>> {
+    match std::fs::read(path) {
+        Ok(bytes) if bytes.iter().all(u8::is_ascii_whitespace) => Ok(None),
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(crate::invalid(path, format!("cannot read {what}: {err}"))),
+    }
+}
+
+/// Render template, override, and local override text into a [`Rendered`] output.
 ///
-/// Pure over file contents: file IO, missing-override handling, and strategy
-/// resolution stay in [`render_template`]. Back-propagation safety replays
-/// call this directly.
+/// Pure over file contents: file IO, missing-file handling, and strategy
+/// resolution stay in [`render_template`]. Precedence is template, then
+/// override, then local. Back-propagation safety replays call this directly.
 pub(crate) fn render_contents(
     template_text: &str,
     override_text: Option<&str>,
+    local_text: Option<&str>,
     strategy: EffectiveStrategy,
     policy: crate::config::ArrayPolicy,
     name: &str,
@@ -323,25 +343,39 @@ pub(crate) fn render_contents(
                     ),
                 ));
             };
+            if local_text.is_some() {
+                tracing::warn!(
+                    template = name,
+                    "local override ignored: strategy `replace` emits the override verbatim"
+                );
+            }
             Ok(Rendered::Text(text.to_string()))
         }
         EffectiveStrategy::AppendTop | EffectiveStrategy::AppendBottom => {
-            let Some(text) = override_text else {
-                return Ok(Rendered::Text(template_text.to_string()));
-            };
-            if text.contains(merge::DELETE_MARKER) {
-                tracing::warn!(
-                    template = name,
-                    "override contains `{}` but the strategy is not a structured merge: kept literally",
-                    merge::DELETE_MARKER
-                );
-            }
-            match strategy {
-                EffectiveStrategy::AppendTop => {
-                    Ok(Rendered::Text(format!("{text}\n{template_text}")))
+            for text in [override_text, local_text].into_iter().flatten() {
+                if text.contains(merge::DELETE_MARKER) {
+                    tracing::warn!(
+                        template = name,
+                        "override contains `{}` but the strategy is not a structured merge: kept literally",
+                        merge::DELETE_MARKER
+                    );
+                    break;
                 }
-                _ => Ok(Rendered::Text(format!("{template_text}\n{text}"))),
             }
+            // Segments stay precedence-ordered (highest first for top,
+            // lowest first for bottom); missing layers vanish with no
+            // stray separators.
+            let mut segments: Vec<&str> = Vec::with_capacity(3);
+            if strategy == EffectiveStrategy::AppendTop {
+                segments.extend(local_text);
+                segments.extend(override_text);
+                segments.push(template_text);
+            } else {
+                segments.push(template_text);
+                segments.extend(override_text);
+                segments.extend(local_text);
+            }
+            Ok(Rendered::Text(segments.join("\n")))
         }
         EffectiveStrategy::Structured(format) => {
             let base = merge::parse_doc(template_text, format, &format!("template `{name}`"))?;
@@ -353,16 +387,27 @@ pub(crate) fn render_contents(
                 }
                 None => base,
             };
+            let merged = match local_text {
+                Some(text) => {
+                    let local = merge::parse_doc(
+                        text,
+                        format,
+                        &format!("local override for template `{name}`"),
+                    )?;
+                    merge::merge_structured(merged, local, policy, name)?
+                }
+                None => merged,
+            };
             Ok(Rendered::Structured {
                 value: merged,
                 format,
             })
         }
         EffectiveStrategy::None => {
-            if override_text.is_some() {
+            if override_text.is_some() || local_text.is_some() {
                 tracing::warn!(
                     template = name,
-                    "override ignored: strategy `none` always copies the template verbatim"
+                    "overrides ignored: strategy `none` always copies the template verbatim"
                 );
             }
             Ok(Rendered::Text(template_text.to_string()))
@@ -464,4 +509,192 @@ pub(crate) fn atomic_write(dest: &Path, content: &[u8]) -> crate::Result<()> {
         .persist(dest)
         .map_err(|err| crate::invalid(dest, format!("cannot replace file: {}", err.error)))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::merge::DocFormat;
+
+    fn json(text: &str) -> serde_json::Value {
+        serde_json::from_str(text).expect("test json parses")
+    }
+
+    fn rendered_value(rendered: Rendered) -> serde_json::Value {
+        match rendered {
+            Rendered::Structured { value, .. } => value,
+            Rendered::Text(text) => panic!("expected structured, got text: {text}"),
+        }
+    }
+
+    fn rendered_text(rendered: Rendered) -> String {
+        match rendered {
+            Rendered::Text(text) => text,
+            Rendered::Structured { .. } => panic!("expected text, got structured"),
+        }
+    }
+
+    const POLICY: crate::config::ArrayPolicy = crate::config::ArrayPolicy::Union;
+
+    #[test]
+    fn structured_local_wins_over_override_wins_over_template() {
+        let rendered = render_contents(
+            "{\"a\": 1, \"b\": 1, \"c\": 1}",
+            Some("{\"b\": 2, \"c\": 2}"),
+            Some("{\"c\": 3}"),
+            EffectiveStrategy::Structured(DocFormat::Json),
+            POLICY,
+            "t",
+        )
+        .unwrap();
+        assert_eq!(
+            rendered_value(rendered),
+            json("{\"a\": 1, \"b\": 2, \"c\": 3}")
+        );
+    }
+
+    #[test]
+    fn structured_layers_skip_missing() {
+        // Template plus local, no override.
+        let rendered = render_contents(
+            "{\"a\": 1}",
+            None,
+            Some("{\"c\": 3}"),
+            EffectiveStrategy::Structured(DocFormat::Json),
+            POLICY,
+            "t",
+        )
+        .unwrap();
+        assert_eq!(rendered_value(rendered), json("{\"a\": 1, \"c\": 3}"));
+
+        // Template plus override, no local.
+        let rendered = render_contents(
+            "{\"a\": 1}",
+            Some("{\"b\": 2}"),
+            None,
+            EffectiveStrategy::Structured(DocFormat::Json),
+            POLICY,
+            "t",
+        )
+        .unwrap();
+        assert_eq!(rendered_value(rendered), json("{\"a\": 1, \"b\": 2}"));
+
+        // Template alone.
+        let rendered = render_contents(
+            "{\"a\": 1}",
+            None,
+            None,
+            EffectiveStrategy::Structured(DocFormat::Json),
+            POLICY,
+            "t",
+        )
+        .unwrap();
+        assert_eq!(rendered_value(rendered), json("{\"a\": 1}"));
+    }
+
+    #[test]
+    fn append_orders_segments_by_precedence() {
+        // Bottom: template, override, local.
+        let rendered = render_contents(
+            "T",
+            Some("O"),
+            Some("L"),
+            EffectiveStrategy::AppendBottom,
+            POLICY,
+            "t",
+        )
+        .unwrap();
+        assert_eq!(rendered_text(rendered), "T\nO\nL");
+
+        // Top: local, override, template.
+        let rendered = render_contents(
+            "T",
+            Some("O"),
+            Some("L"),
+            EffectiveStrategy::AppendTop,
+            POLICY,
+            "t",
+        )
+        .unwrap();
+        assert_eq!(rendered_text(rendered), "L\nO\nT");
+
+        // Missing layers vanish with no stray separators (legacy behavior).
+        let rendered = render_contents(
+            "T",
+            Some("O"),
+            None,
+            EffectiveStrategy::AppendBottom,
+            POLICY,
+            "t",
+        )
+        .unwrap();
+        assert_eq!(rendered_text(rendered), "T\nO");
+        let rendered = render_contents(
+            "T",
+            None,
+            None,
+            EffectiveStrategy::AppendBottom,
+            POLICY,
+            "t",
+        )
+        .unwrap();
+        assert_eq!(rendered_text(rendered), "T");
+        let rendered = render_contents(
+            "T",
+            Some("O"),
+            None,
+            EffectiveStrategy::AppendTop,
+            POLICY,
+            "t",
+        )
+        .unwrap();
+        assert_eq!(rendered_text(rendered), "O\nT");
+
+        // Local without override still applies.
+        let rendered = render_contents(
+            "T",
+            None,
+            Some("L"),
+            EffectiveStrategy::AppendBottom,
+            POLICY,
+            "t",
+        )
+        .unwrap();
+        assert_eq!(rendered_text(rendered), "T\nL");
+        let rendered = render_contents(
+            "T",
+            None,
+            Some("L"),
+            EffectiveStrategy::AppendTop,
+            POLICY,
+            "t",
+        )
+        .unwrap();
+        assert_eq!(rendered_text(rendered), "L\nT");
+    }
+
+    #[test]
+    fn replace_and_none_ignore_local() {
+        let rendered = render_contents(
+            "T",
+            Some("O"),
+            Some("L"),
+            EffectiveStrategy::Replace,
+            POLICY,
+            "t",
+        )
+        .unwrap();
+        assert_eq!(rendered_text(rendered), "O");
+
+        let rendered = render_contents(
+            "T",
+            Some("O"),
+            Some("L"),
+            EffectiveStrategy::None,
+            POLICY,
+            "t",
+        )
+        .unwrap();
+        assert_eq!(rendered_text(rendered), "T");
+    }
 }

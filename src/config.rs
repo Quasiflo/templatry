@@ -363,6 +363,10 @@ pub struct Template {
     /// Override directory (defaults to `default_override_dir`).
     #[serde(default)]
     pub override_dir: Option<String>,
+    /// Local override filename in `override_dir`, applied after the override
+    /// (missing files are skipped; typically gitignored machine-local tweaks).
+    #[serde(default)]
+    pub local_override_file: Option<String>,
     /// Generated filename (defaults to the template basename).
     #[serde(default)]
     pub generated_file: Option<String>,

@@ -1,0 +1,21 @@
+[templates.chain]
+template = "chain.json"
+local_override_file = "chain.local.json"
+
+[templates.nomiddle]
+template = "plain.json"
+local_override_file = "local-only.json"
+
+[templates.appended]
+template = "frag.txt"
+local_override_file = "frag.local.txt"
+
+[templates.topped]
+template = "head.txt"
+strategy = "append_top"
+local_override_file = "head.local.txt"
+
+[templates.replaced]
+template = "base.env"
+strategy = "replace"
+local_override_file = "base.local.env"

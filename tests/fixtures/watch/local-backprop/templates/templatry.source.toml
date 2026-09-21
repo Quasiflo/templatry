@@ -1,0 +1,4 @@
+[templates.app]
+template = "app.json"
+back_propagate = true
+local_override_file = "app.local.json"
