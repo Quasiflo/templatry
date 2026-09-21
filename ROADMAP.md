@@ -37,7 +37,7 @@ Templatry succeeds `smartworkspace` (`/Users/luke/Documents/Projects/smartworksp
   # exclude_templates = ["legacy"]  # remove listed templates (wins all ties)
   ```
 
-- `strategy` defaults to auto-detect on file extension (structured deep merge for `json`, `jsonc`, `yaml`, `yml`, `toml`; `append_bottom` for anything else) with explicit `append_top`, `append_bottom`, `replace`, and `none` (verbatim template copy ignoring overrides, e.g. licenses) available; structured merges share one JSON-value intermediate representation (`yaml_serde`, as in `smartworkspace`).
+- `strategy` defaults to auto-detect on file extension (structured deep merge for `json`, `jsonc`, `yaml`, `yml`, `toml`; `append_bottom` for anything else) with explicit `merge_json` (comments stripped), `merge_yaml`, `merge_toml` (all forcing format regardless of filename, for extensionless files), `append_top`, `append_bottom`, `replace`, and `none` (verbatim template copy ignoring overrides, e.g. licenses) available; structured merges share one JSON-value intermediate representation (`yaml_serde`, as in `smartworkspace`).
 - Labels are opaque strings per template; project `enable_labels` and `disable_labels` apply after source `[default]` resolution, with disables winning ties, and unknown labels referenced from the project file are a validation error. Projects can additionally select individual templates via `include_templates` (absent means no restriction, present-but-empty disables everything) and `exclude_templates` (removes listed templates, winning all ties); unknown template names are a validation error.
 
 ## Source Retrieval and Cache

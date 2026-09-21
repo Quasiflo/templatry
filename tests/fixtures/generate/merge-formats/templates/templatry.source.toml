@@ -1,0 +1,11 @@
+[templates.app]
+template = "myapprc"
+strategy = "merge_json"
+
+[templates.tool]
+template = "tool.conf"
+strategy = "merge_yaml"
+
+[templates.cfg]
+template = "cfg.rc"
+strategy = "merge_toml"

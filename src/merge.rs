@@ -71,15 +71,12 @@ pub fn effective_strategy(
         Some(Strategy::AppendBottom) => Ok(EffectiveStrategy::AppendBottom),
         Some(Strategy::Replace) => Ok(EffectiveStrategy::Replace),
         Some(Strategy::None) => Ok(EffectiveStrategy::None),
-        Some(Strategy::Merge) => match format_for(generated_filename) {
-            Some(format) => Ok(EffectiveStrategy::Structured(format)),
-            None => Err(crate::invalid(
-                Path::new("templatry.source.toml"),
-                format!(
-                    "strategy `merge` needs a structured file extension (json, jsonc, yaml, yml, toml): `{generated_filename}` has none"
-                ),
-            )),
-        },
+        // Explicit formats ignore the filename entirely, so extensionless
+        // files like `.somethingrc` merge structurally. `merge_json` strips
+        // comments regardless (hence no separate `merge_jsonc`).
+        Some(Strategy::MergeJson) => Ok(EffectiveStrategy::Structured(DocFormat::JsonC)),
+        Some(Strategy::MergeYaml) => Ok(EffectiveStrategy::Structured(DocFormat::Yaml)),
+        Some(Strategy::MergeToml) => Ok(EffectiveStrategy::Structured(DocFormat::Toml)),
         None => Ok(format_for(generated_filename)
             .map(EffectiveStrategy::Structured)
             .unwrap_or(EffectiveStrategy::AppendBottom)),
@@ -651,15 +648,16 @@ mod tests {
             EffectiveStrategy::None
         );
         assert_eq!(
-            effective_strategy(&template_with(Some(Strategy::Merge)), "a.toml").unwrap(),
-            EffectiveStrategy::Structured(DocFormat::Toml)
+            effective_strategy(&template_with(Some(Strategy::MergeYaml)), "a.toml").unwrap(),
+            EffectiveStrategy::Structured(DocFormat::Yaml)
         );
-        let err =
-            effective_strategy(&template_with(Some(Strategy::Merge)), ".gitignore").unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("needs a structured file extension"),
-            "{err:?}"
+        assert_eq!(
+            effective_strategy(&template_with(Some(Strategy::MergeJson)), ".somethingrc").unwrap(),
+            EffectiveStrategy::Structured(DocFormat::JsonC)
+        );
+        assert_eq!(
+            effective_strategy(&template_with(Some(Strategy::MergeToml)), "no-extension").unwrap(),
+            EffectiveStrategy::Structured(DocFormat::Toml)
         );
     }
 

@@ -506,9 +506,12 @@ impl AbstractTemplate {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Strategy {
-    /// Structured deep merge (also the auto-detect behavior for
-    /// `json`/`jsonc`/`yaml`/`yml`/`toml`).
-    Merge,
+    /// Structured deep merge forced as JSON (comments stripped).
+    MergeJson,
+    /// Structured deep merge forced as YAML.
+    MergeYaml,
+    /// Structured deep merge forced as TOML.
+    MergeToml,
     /// Override bytes, newline, then template bytes.
     AppendTop,
     /// Template bytes, newline, then override bytes (also the fallback for
@@ -1048,7 +1051,9 @@ exclude_labels = ["dart"]
     #[test]
     fn all_strategy_values_parse() {
         for (value, expected) in [
-            ("merge", Strategy::Merge),
+            ("merge_json", Strategy::MergeJson),
+            ("merge_yaml", Strategy::MergeYaml),
+            ("merge_toml", Strategy::MergeToml),
             ("append_top", Strategy::AppendTop),
             ("append_bottom", Strategy::AppendBottom),
             ("replace", Strategy::Replace),

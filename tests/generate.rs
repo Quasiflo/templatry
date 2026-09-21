@@ -47,6 +47,7 @@ fn all_generate_fixtures_are_known() {
             "json-merge",
             "labels",
             "local-chain",
+            "merge-formats",
             "preserve-ignore",
             "replace-missing",
             "shared-conflict",
@@ -184,4 +185,13 @@ async fn golden_extends_basic() {
         .await
         .expect("generate");
     common::assert_tree_matches(&root, &source_case("extends-basic").join("expected"));
+}
+
+#[tokio::test]
+async fn golden_merge_formats() {
+    let (_temp, root) = setup("merge-formats");
+    generate::run(&options(&root, |_| {}))
+        .await
+        .expect("generate");
+    common::assert_tree_matches(&root, &source_case("merge-formats").join("expected"));
 }

@@ -113,7 +113,7 @@ override_dir = ".config/"        # defaults to default_override_dir
 local_override_file = "settings.local.json" # optional third layer in override_dir (usually gitignored)
 generated_file = "settings.json" # defaults to the template basename
 generated_dir = ".config/generated" # defaults to default_generated_dir
-strategy = "merge"               # merge | append_top | append_bottom | replace | none; default: auto-detect
+strategy = "merge_json"          # merge_json | merge_yaml | merge_toml | append_top | append_bottom | replace | none; default: auto-detect
 array_policy = "union"           # union | replace; default: union
 back_propagate = false           # watch generated edits back into the override
 labels = ["rust"]
@@ -145,12 +145,14 @@ Abstracts may define any template field (including `template` itself as a defaul
 
 ## Merge Strategies
 
-Omitted `strategy` auto-detects on the generated filename: `json`, `jsonc`, `yaml`, `yml`, and `toml` merge structurally, everything else appends the override at the bottom.
+Omitted `strategy` auto-detects on the generated filename: `json`, `jsonc`, `yaml`, `yml`, and `toml` merge structurally, everything else appends the override at the bottom. The `merge_*` strategies force a format regardless of filename, for structured files with no usable extension (like `.somethingrc`).
 
 | Strategy        | Behavior |
 | --------------- | -------- |
 | (auto)          | Structured deep merge for known extensions, else `append_bottom` |
-| `merge`         | Structured deep merge (needs a structured extension) |
+| `merge_json`    | Structured deep merge as JSON (comments stripped) |
+| `merge_yaml`    | Structured deep merge as YAML |
+| `merge_toml`    | Structured deep merge as TOML |
 | `append_top`    | Precedence-ordered segments: local, override, template (missing layers skipped) |
 | `append_bottom` | Precedence-ordered segments: template, override, local (missing layers skipped) |
 | `replace`       | Override file verbatim (missing override is an error; local warns and is ignored) |
