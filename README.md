@@ -125,6 +125,24 @@ labels = ["rust"]
 exclude_labels = ["legacy"]  # default-allow except these; mutually exclusive with include_labels
 ```
 
+Shared settings collapse into inert `[abstract.*]` tables that concrete templates pull in with `extends` (single abstract only; concrete fields add to or override the base, label sets union, `back_propagate` takes the first set value):
+
+```toml
+[abstract.gitignore]
+generated_dir = "."
+generated_file = ".gitignore"
+override_dir = "."
+override_file = "template.gitignore"
+strategy = "append_bottom"
+
+[templates.gitignore-apps]
+template = "apps/template.gitignore"
+extends = "gitignore"
+labels = ["apps"]
+```
+
+Abstracts may define any template field (including `template` itself as a default) but never generate on their own; the merged result must still define a `template` path. Unknown `extends` names fail listing the available abstracts.
+
 ## Merge Strategies
 
 Omitted `strategy` auto-detects on the generated filename: `json`, `jsonc`, `yaml`, `yml`, and `toml` merge structurally, everything else appends the override at the bottom.

@@ -91,9 +91,11 @@ pub(crate) async fn load_context(options: &Options) -> crate::Result<ProjectCont
     let resolved = crate::source::resolve(&project.source, &project_root, options.offline).await?;
     let source_file = resolved.root_dir.join(SOURCE_CONFIG_FILENAME);
     let content = crate::read_file(&source_file)?;
-    let source: SourceFile = crate::parse_toml(&source_file, &content)?;
+    let mut source: SourceFile = crate::parse_toml(&source_file, &content)?;
     source.validate(&resolved.root_dir, &source_file)?;
-    let enabled = config::resolve_enabled_templates(&source, &project.source)?;
+    source.templates = source.resolved_templates(&source_file)?;
+    let enabled =
+        config::resolve_enabled_templates(&source.templates, &source.default, &project.source)?;
     Ok(ProjectContext {
         project_file,
         project_root,
@@ -252,7 +254,7 @@ pub(crate) fn render_template(
     project_root: &Path,
     configs: &Configs,
 ) -> crate::Result<Rendered> {
-    let template_path = source_root.join(&template.template);
+    let template_path = source_root.join(template.template_path()?);
     let template_bytes = crate::read_file_bytes(&template_path)?;
     let generated_filename = template.resolved_generated_file()?;
     let strategy = merge::effective_strategy(template, &generated_filename)?;
@@ -303,7 +305,7 @@ pub(crate) fn render_template(
                 override_text.as_deref(),
                 local_text.as_deref(),
                 strategy,
-                template.array_policy,
+                template.array_policy.unwrap_or_default(),
                 name,
             )
         }

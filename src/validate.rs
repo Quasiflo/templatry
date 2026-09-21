@@ -70,8 +70,9 @@ async fn validate_project_file(path: &Path) -> crate::Result<()> {
     let content = crate::read_file(&source_file)?;
     let source: SourceFile = crate::parse_toml(&source_file, &content)?;
     source.validate(&resolved.root_dir, &source_file)?;
+    let resolved = source.resolved_templates(&source_file)?;
     // Resolving also rejects unknown project labels and template names
     // against the source label and template sets.
-    config::resolve_enabled_templates(&source, &project.source)?;
+    config::resolve_enabled_templates(&resolved, &source.default, &project.source)?;
     Ok(())
 }

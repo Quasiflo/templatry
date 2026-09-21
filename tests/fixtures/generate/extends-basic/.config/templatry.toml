@@ -1,0 +1,3 @@
+[source]
+path = "templates"
+enable_labels = ["apps", "cpp"]

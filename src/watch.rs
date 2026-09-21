@@ -263,7 +263,10 @@ fn capture_pending(
     let tracked = lock_tracker(tracker);
     let mut pending = Vec::new();
     for (dest, members) in groups {
-        if !members.iter().any(|member| member.template.back_propagate) {
+        if !members
+            .iter()
+            .any(|member| member.template.back_propagate == Some(true))
+        {
             continue;
         }
         let Some(last) = tracked.entries.get(dest) else {
@@ -359,7 +362,7 @@ fn read_member_files(
     members
         .iter()
         .map(|member| {
-            let template_path = context.source_root.join(&member.template.template);
+            let template_path = context.source_root.join(member.template.template_path()?);
             let template_text = crate::read_file(&template_path)?;
             let override_path = override_path_for(context, &member.template)?;
             let override_text = read_layer(&override_path, "override file")?;
@@ -416,8 +419,8 @@ fn snapshot_members<'a>(
                 override_text: file.override_text.as_deref(),
                 local_text: file.local_text.as_deref(),
                 strategy: crate::merge::effective_strategy(&member.template, &generated_filename)?,
-                policy: member.template.array_policy,
-                back_propagate: member.template.back_propagate,
+                policy: member.template.array_policy.unwrap_or_default(),
+                back_propagate: member.template.back_propagate.unwrap_or(false),
                 ignore_keys: parse_ignore_patterns(&member.template.backprop_ignore)?,
                 ignore_values: parse_ignore_patterns(&member.template.backprop_ignore_values)?,
             })
@@ -608,7 +611,7 @@ impl Subscriptions {
                         .or_default()
                         .push(dest_abs.clone());
                 }
-                if member.template.back_propagate {
+                if member.template.back_propagate == Some(true) {
                     watches_generated = true;
                 }
             }
@@ -931,15 +934,16 @@ mod tests {
         templates_map.insert(
             "app".to_string(),
             Template {
-                template: "app.json".to_string(),
+                template: Some("app.json".to_string()),
+                extends: None,
                 override_file: None,
                 override_dir: None,
                 local_override_file: None,
                 generated_file: None,
                 generated_dir: None,
                 strategy: None,
-                array_policy: crate::config::ArrayPolicy::Union,
-                back_propagate: true,
+                array_policy: Some(crate::config::ArrayPolicy::Union),
+                back_propagate: Some(true),
                 labels: Default::default(),
                 backprop_ignore: Vec::new(),
                 backprop_ignore_values: Vec::new(),
@@ -951,6 +955,7 @@ mod tests {
             source_root: templates,
             source: SourceFile {
                 configs: Configs::default(),
+                abstracts: Default::default(),
                 templates: templates_map,
                 default: None,
             },

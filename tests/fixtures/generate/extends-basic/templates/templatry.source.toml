@@ -1,0 +1,16 @@
+[abstract.gitignore]
+generated_dir = ""
+generated_file = ".gitignore"
+override_dir = ""
+override_file = "template.gitignore"
+strategy = "append_bottom"
+
+[templates.gitignore-apps]
+template = "apps/template.gitignore"
+extends = "gitignore"
+labels = ["apps"]
+
+[templates.gitignore-cpp]
+template = "cpp/template.gitignore"
+extends = "gitignore"
+labels = ["cpp"]

@@ -596,15 +596,16 @@ mod tests {
 
     fn template_with(strategy: Option<Strategy>) -> Template {
         Template {
-            template: "app.json".to_string(),
+            template: Some("app.json".to_string()),
+            extends: None,
             override_file: None,
             override_dir: None,
             local_override_file: None,
             generated_file: None,
             generated_dir: None,
             strategy,
-            array_policy: ArrayPolicy::Union,
-            back_propagate: false,
+            array_policy: Some(ArrayPolicy::Union),
+            back_propagate: Some(false),
             labels: BTreeSet::new(),
             backprop_ignore: Vec::new(),
             backprop_ignore_values: Vec::new(),

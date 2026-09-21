@@ -43,6 +43,7 @@ fn all_generate_fixtures_are_known() {
     assert_eq!(
         names,
         [
+            "extends-basic",
             "json-merge",
             "labels",
             "local-chain",
@@ -174,4 +175,13 @@ async fn golden_local_chain() {
         .await
         .expect("generate");
     common::assert_tree_matches(&root, &source_case("local-chain").join("expected"));
+}
+
+#[tokio::test]
+async fn golden_extends_basic() {
+    let (_temp, root) = setup("extends-basic");
+    generate::run(&options(&root, |_| {}))
+        .await
+        .expect("generate");
+    common::assert_tree_matches(&root, &source_case("extends-basic").join("expected"));
 }

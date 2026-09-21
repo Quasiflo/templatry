@@ -295,13 +295,16 @@ fn is_hex(value: &str) -> bool {
 
 // ---- Source config (`templatry.source.toml`) -------------------------------
 
-/// Template source definition: defaults, templates, and label rules.
+/// Template source definition: defaults, abstracts, templates, label rules.
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SourceFile {
     /// Default directories (all defaults apply when `[configs]` is omitted).
     #[serde(default)]
     pub configs: Configs,
+    /// Inert partial templates merged into concrete templates via `extends`.
+    #[serde(default, rename = "abstract")]
+    pub abstracts: BTreeMap<String, AbstractTemplate>,
     /// One entry per template file, keyed by template name.
     #[serde(default)]
     pub templates: BTreeMap<String, Template>,
@@ -355,8 +358,13 @@ pub struct DefaultRules {
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Template {
-    /// Template file path, relative to the source root.
-    pub template: String,
+    /// Template file path, relative to the source root (inheritable from an
+    /// abstract; required after merging).
+    #[serde(default)]
+    pub template: Option<String>,
+    /// Abstract template whose fields this entry inherits (`[abstract.<name>]`).
+    #[serde(default)]
+    pub extends: Option<String>,
     /// Override filename (defaults to the template basename).
     #[serde(default)]
     pub override_file: Option<String>,
@@ -378,10 +386,10 @@ pub struct Template {
     pub strategy: Option<Strategy>,
     /// Array merge policy for structured merges (defaults to `union`).
     #[serde(default)]
-    pub array_policy: ArrayPolicy,
+    pub array_policy: Option<ArrayPolicy>,
     /// Watch the generated file and fold edits back into the override.
     #[serde(default)]
-    pub back_propagate: bool,
+    pub back_propagate: Option<bool>,
     /// Back-propagation ignore paths: hand-edits here stay maintained
     /// (never folded, never overwritten). Requires `back_propagate`.
     #[serde(default)]
@@ -393,6 +401,105 @@ pub struct Template {
     /// Arbitrary labels for selection (e.g. `rust`, `dart`).
     #[serde(default)]
     pub labels: BTreeSet<String>,
+}
+
+/// Inert partial template: every field optional, merged into concrete
+/// templates naming it via `extends`. Never generates on its own, and cannot
+/// itself extend (single-level inheritance only).
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AbstractTemplate {
+    /// Template file path default, relative to the source root.
+    #[serde(default)]
+    pub template: Option<String>,
+    /// Override filename default.
+    #[serde(default)]
+    pub override_file: Option<String>,
+    /// Override directory default.
+    #[serde(default)]
+    pub override_dir: Option<String>,
+    /// Local override filename default.
+    #[serde(default)]
+    pub local_override_file: Option<String>,
+    /// Generated filename default.
+    #[serde(default)]
+    pub generated_file: Option<String>,
+    /// Generated directory default.
+    #[serde(default)]
+    pub generated_dir: Option<String>,
+    /// Merge strategy default.
+    #[serde(default)]
+    pub strategy: Option<Strategy>,
+    /// Array merge policy default.
+    #[serde(default)]
+    pub array_policy: Option<ArrayPolicy>,
+    /// Back-propagation default (`None` inherits as disabled).
+    #[serde(default)]
+    pub back_propagate: Option<bool>,
+    /// Labels contributed to every extending template (unioned).
+    #[serde(default)]
+    pub labels: BTreeSet<String>,
+    /// Ignore paths contributed to every extending template (unioned).
+    #[serde(default)]
+    pub backprop_ignore: Vec<String>,
+    /// Value-ignore paths contributed to every extending template (unioned).
+    #[serde(default)]
+    pub backprop_ignore_values: Vec<String>,
+}
+
+impl AbstractTemplate {
+    /// Merge into a concrete template: concrete scalar fields win when set,
+    /// set-valued fields union, `back_propagate` takes the first set value.
+    fn apply_to(&self, concrete: &Template) -> Template {
+        let union_labels: BTreeSet<String> = self
+            .labels
+            .iter()
+            .chain(concrete.labels.iter())
+            .cloned()
+            .collect();
+        let mut union_ignore = self.backprop_ignore.clone();
+        for pattern in &concrete.backprop_ignore {
+            if !union_ignore.contains(pattern) {
+                union_ignore.push(pattern.clone());
+            }
+        }
+        let mut union_ignore_values = self.backprop_ignore_values.clone();
+        for pattern in &concrete.backprop_ignore_values {
+            if !union_ignore_values.contains(pattern) {
+                union_ignore_values.push(pattern.clone());
+            }
+        }
+        Template {
+            template: concrete.template.clone().or_else(|| self.template.clone()),
+            extends: None,
+            override_file: concrete
+                .override_file
+                .clone()
+                .or_else(|| self.override_file.clone()),
+            override_dir: concrete
+                .override_dir
+                .clone()
+                .or_else(|| self.override_dir.clone()),
+            local_override_file: concrete
+                .local_override_file
+                .clone()
+                .or_else(|| self.local_override_file.clone()),
+            generated_file: concrete
+                .generated_file
+                .clone()
+                .or_else(|| self.generated_file.clone()),
+            generated_dir: concrete
+                .generated_dir
+                .clone()
+                .or_else(|| self.generated_dir.clone()),
+            strategy: concrete.strategy.or(self.strategy),
+            array_policy: concrete.array_policy.or(self.array_policy),
+            back_propagate: concrete.back_propagate.or(self.back_propagate),
+            backprop_ignore: union_ignore,
+            backprop_ignore_values: union_ignore_values,
+            labels: union_labels,
+        }
+    }
 }
 
 /// How a template merges with its project override.
@@ -425,18 +532,25 @@ pub enum ArrayPolicy {
 }
 
 impl Template {
+    /// Template path (required after `extends` resolution; validated).
+    pub(crate) fn template_path(&self) -> crate::Result<&str> {
+        self.template.as_deref().filter(|path| !path.trim().is_empty()).ok_or_else(|| {
+            crate::invalid(
+                Path::new("templatry.source.toml"),
+                "template entry defines no `template` path (and no abstract supplies one): set `template` or `extends`",
+            )
+        })
+    }
+
     /// Override filename: explicit value or the template basename.
     pub fn resolved_override_file(&self) -> crate::Result<String> {
         if let Some(file) = self.override_file.as_deref() {
             return Ok(file.to_string());
         }
-        basename(&self.template).ok_or_else(|| {
+        basename(self.template_path()?).ok_or_else(|| {
             crate::invalid(
                 Path::new("templatry.source.toml"),
-                format!(
-                    "template `{}` has no filename to default `override_file` from: set it explicitly",
-                    self.template
-                ),
+                "template path has no filename to default `override_file` from: set it explicitly",
             )
         })
     }
@@ -446,13 +560,10 @@ impl Template {
         if let Some(file) = self.generated_file.as_deref() {
             return Ok(file.to_string());
         }
-        basename(&self.template).ok_or_else(|| {
+        basename(self.template_path()?).ok_or_else(|| {
             crate::invalid(
                 Path::new("templatry.source.toml"),
-                format!(
-                    "template `{}` has no filename to default `generated_file` from: set it explicitly",
-                    self.template
-                ),
+                "template path has no filename to default `generated_file` from: set it explicitly",
             )
         })
     }
@@ -480,10 +591,55 @@ fn basename(path: &str) -> Option<String> {
 }
 
 impl SourceFile {
+    /// Merge every concrete template with its abstract base, if any.
+    ///
+    /// Templates without `extends` pass through untouched. Unknown abstract
+    /// names fail listing the available ones.
+    pub fn resolved_templates(
+        &self,
+        display_path: &Path,
+    ) -> crate::Result<BTreeMap<String, Template>> {
+        let mut resolved = BTreeMap::new();
+        for (name, template) in &self.templates {
+            let merged = match template
+                .extends
+                .as_deref()
+                .filter(|base| !base.trim().is_empty())
+            {
+                None => template.clone(),
+                Some(base_name) => {
+                    let base = self.abstracts.get(base_name).ok_or_else(|| {
+                        let mut available: Vec<&str> = self
+                            .abstracts
+                            .keys()
+                            .map(String::as_str)
+                            .collect();
+                        available.sort();
+                        let hint = if available.is_empty() {
+                            "no `[abstract.*]` tables are defined".to_string()
+                        } else {
+                            format!("available: {}", available.join(", "))
+                        };
+                        crate::invalid(
+                            display_path,
+                            format!(
+                                "[templates.{name}] extends unknown abstract `{base_name}` ({hint}): fix the typo, add `[abstract.{base_name}]`, or drop `extends`"
+                            ),
+                        )
+                    })?;
+                    base.apply_to(template)
+                }
+            };
+            resolved.insert(name.clone(), merged);
+        }
+        Ok(resolved)
+    }
+
     /// Validate schema consistency plus on-disk template references.
     ///
     /// `source_dir` is the directory the `template` paths resolve against;
-    /// `display_path` names the source file in diagnostics.
+    /// `display_path` names the source file in diagnostics. All checks run on
+    /// `extends`-resolved templates.
     pub fn validate(&self, source_dir: &Path, display_path: &Path) -> crate::Result<()> {
         if self.templates.is_empty() {
             return Err(crate::invalid(
@@ -491,6 +647,7 @@ impl SourceFile {
                 "defines no templates: add at least one `[templates.<name>]` entry",
             ));
         }
+        let resolved = self.resolved_templates(display_path)?;
         if let Some(default) = self.default.as_ref()
             && default.include_labels.is_some()
             && default.exclude_labels.is_some()
@@ -500,21 +657,25 @@ impl SourceFile {
                 "`[default]` sets both `include_labels` and `exclude_labels`: keep exactly one (or neither for everything-enabled)",
             ));
         }
-        for (name, template) in &self.templates {
+        for (name, template) in &resolved {
             template.validate(name, source_dir, display_path)?;
         }
-        self.validate_shared_destinations(display_path)?;
-        self.validate_label_refs(display_path)?;
+        Self::validate_shared_destinations(&resolved, &self.configs, display_path)?;
+        Self::validate_label_refs(&resolved, self.default.as_ref(), display_path)?;
         Ok(())
     }
 
     /// `replace` cannot combine: flag shared destinations involving it.
     /// Structured and text strategies cannot combine either.
-    fn validate_shared_destinations(&self, display_path: &Path) -> crate::Result<()> {
+    fn validate_shared_destinations(
+        templates: &BTreeMap<String, Template>,
+        configs: &Configs,
+        display_path: &Path,
+    ) -> crate::Result<()> {
         let mut groups: BTreeMap<(String, String), Vec<&str>> = BTreeMap::new();
-        for (name, template) in &self.templates {
+        for (name, template) in templates {
             let key = (
-                template.resolved_generated_dir(&self.configs),
+                template.resolved_generated_dir(configs),
                 template.resolved_generated_file()?,
             );
             groups.entry(key).or_default().push(name.as_str());
@@ -525,7 +686,7 @@ impl SourceFile {
             }
             if names
                 .iter()
-                .any(|name| self.templates[*name].strategy == Some(Strategy::Replace))
+                .any(|name| templates[*name].strategy == Some(Strategy::Replace))
             {
                 return Err(crate::invalid(
                     display_path,
@@ -538,12 +699,12 @@ impl SourceFile {
             let mut families = BTreeSet::new();
             let mut back_propagated = Vec::new();
             for name in names {
-                let template = &self.templates[*name];
+                let template = &templates[*name];
                 families.insert(crate::merge::family_of(
                     template,
                     &template.resolved_generated_file()?,
                 )?);
-                if template.back_propagate {
+                if template.back_propagate == Some(true) {
                     back_propagated.push(*name);
                 }
             }
@@ -571,11 +732,15 @@ impl SourceFile {
     }
 
     /// `[default]` label lists must reference labels some template defines.
-    fn validate_label_refs(&self, display_path: &Path) -> crate::Result<()> {
-        let Some(default) = self.default.as_ref() else {
+    fn validate_label_refs(
+        templates: &BTreeMap<String, Template>,
+        default: Option<&DefaultRules>,
+        display_path: &Path,
+    ) -> crate::Result<()> {
+        let Some(default) = default else {
             return Ok(());
         };
-        let known = self.all_labels();
+        let known = Self::all_labels(templates);
         for labels in [
             default.include_labels.as_ref(),
             default.exclude_labels.as_ref(),
@@ -597,9 +762,9 @@ impl SourceFile {
         Ok(())
     }
 
-    /// Union of every label defined by any template.
-    fn all_labels(&self) -> BTreeSet<&str> {
-        self.templates
+    /// Union of every label defined by the given templates.
+    fn all_labels(templates: &BTreeMap<String, Template>) -> BTreeSet<&str> {
+        templates
             .values()
             .flat_map(|template| template.labels.iter().map(String::as_str))
             .collect()
@@ -610,19 +775,24 @@ impl Template {
     /// Validate one template entry: path safety, on-disk existence, and
     /// back-propagation compatibility.
     fn validate(&self, name: &str, source_dir: &Path, display_path: &Path) -> crate::Result<()> {
-        if self.template.trim().is_empty() {
+        let Some(template) = self
+            .template
+            .as_deref()
+            .filter(|path| !path.trim().is_empty())
+        else {
             return Err(crate::invalid(
                 display_path,
-                format!("[templates.{name}] `template` must not be empty"),
+                format!(
+                    "[templates.{name}] defines no `template` path (and no abstract supplies one): set `template` or `extends`"
+                ),
             ));
-        }
-        let relative = Path::new(&self.template);
+        };
+        let relative = Path::new(template);
         if relative.is_absolute() {
             return Err(crate::invalid(
                 display_path,
                 format!(
-                    "[templates.{name}] `template` must be relative to the source root (got `{}`)",
-                    self.template
+                    "[templates.{name}] `template` must be relative to the source root (got `{template}`)"
                 ),
             ));
         }
@@ -633,8 +803,7 @@ impl Template {
             return Err(crate::invalid(
                 display_path,
                 format!(
-                    "[templates.{name}] `template` must not escape the source root with `..` (got `{}`)",
-                    self.template
+                    "[templates.{name}] `template` must not escape the source root with `..` (got `{template}`)"
                 ),
             ));
         }
@@ -643,12 +812,11 @@ impl Template {
             return Err(crate::invalid(
                 display_path,
                 format!(
-                    "[templates.{name}] `template` `{}` does not exist under the source root",
-                    self.template
+                    "[templates.{name}] `template` `{template}` does not exist under the source root"
                 ),
             ));
         }
-        if self.back_propagate && self.strategy == Some(Strategy::None) {
+        if self.back_propagate == Some(true) && self.strategy == Some(Strategy::None) {
             return Err(crate::invalid(
                 display_path,
                 format!(
@@ -656,7 +824,7 @@ impl Template {
                 ),
             ));
         }
-        if !self.back_propagate
+        if self.back_propagate != Some(true)
             && (!self.backprop_ignore.is_empty() || !self.backprop_ignore_values.is_empty())
         {
             return Err(crate::invalid(
@@ -699,17 +867,19 @@ impl Template {
 
 /// Resolve the enabled template names for a project selection.
 ///
-/// Base rules come from the source `[default]` section (neither list means
-/// everything enabled); project `enable_labels` force on, `disable_labels`
-/// force off. Project `include_templates` then restricts to listed templates
-/// (absent means no restriction, present-but-empty disables everything) and
-/// `exclude_templates` removes listed ones, winning all ties. Unknown project
-/// labels and template names are an error.
+/// `templates` must already be `extends`-resolved. Base rules come from the
+/// source `[default]` section (neither list means everything enabled); project
+/// `enable_labels` force on, `disable_labels` force off. Project
+/// `include_templates` then restricts to listed templates (absent means no
+/// restriction, present-but-empty disables everything) and `exclude_templates`
+/// removes listed ones, winning all ties. Unknown project labels and template
+/// names are an error.
 pub fn resolve_enabled_templates(
-    source: &SourceFile,
+    templates: &BTreeMap<String, Template>,
+    default: &Option<DefaultRules>,
     project: &SourceRef,
 ) -> crate::Result<BTreeSet<String>> {
-    let known_labels: BTreeSet<&str> = source.all_labels();
+    let known_labels: BTreeSet<&str> = SourceFile::all_labels(templates);
     for label in project
         .enable_labels
         .iter()
@@ -726,18 +896,18 @@ pub fn resolve_enabled_templates(
     }
     if let Some(include) = project.include_templates.as_ref() {
         for name in include {
-            if !source.templates.contains_key(name) {
-                return Err(unknown_template(name, source));
+            if !templates.contains_key(name) {
+                return Err(unknown_template(name, templates));
             }
         }
     }
     for name in &project.exclude_templates {
-        if !source.templates.contains_key(name) {
-            return Err(unknown_template(name, source));
+        if !templates.contains_key(name) {
+            return Err(unknown_template(name, templates));
         }
     }
 
-    let base_enabled = |template: &Template| match source.default.as_ref() {
+    let base_enabled = |template: &Template| match default.as_ref() {
         Some(default) if let Some(include) = default.include_labels.as_ref() => {
             template.labels.iter().any(|label| include.contains(label))
         }
@@ -748,7 +918,7 @@ pub fn resolve_enabled_templates(
     };
 
     let mut enabled = BTreeSet::new();
-    for (name, template) in &source.templates {
+    for (name, template) in templates {
         let mut on = base_enabled(template);
         if template
             .labels
@@ -780,8 +950,8 @@ pub fn resolve_enabled_templates(
 }
 
 /// Unknown-template diagnostic listing what the source actually defines.
-fn unknown_template(name: &str, source: &SourceFile) -> crate::Error {
-    let mut available: Vec<&str> = source.templates.keys().map(String::as_str).collect();
+fn unknown_template(name: &str, templates: &BTreeMap<String, Template>) -> crate::Error {
+    let mut available: Vec<&str> = templates.keys().map(String::as_str).collect();
     available.sort();
     crate::invalid(
         Path::new("templatry.toml"),
@@ -837,8 +1007,8 @@ mod tests {
         assert!(source.default.is_none());
         let template = &source.templates["app"];
         assert_eq!(template.strategy, None);
-        assert_eq!(template.array_policy, ArrayPolicy::Union);
-        assert!(!template.back_propagate);
+        assert_eq!(template.array_policy, None);
+        assert_eq!(template.back_propagate, None);
         assert!(template.labels.is_empty());
     }
 
@@ -870,8 +1040,8 @@ exclude_labels = ["dart"]
         assert_eq!(template.resolved_generated_file().unwrap(), "out.yaml");
         assert_eq!(template.resolved_generated_dir(&source.configs), "gdir");
         assert_eq!(template.strategy, Some(Strategy::AppendBottom));
-        assert_eq!(template.array_policy, ArrayPolicy::Replace);
-        assert!(template.back_propagate);
+        assert_eq!(template.array_policy, Some(ArrayPolicy::Replace));
+        assert_eq!(template.back_propagate, Some(true));
         assert!(template.labels.contains("rust"));
     }
 
@@ -1020,7 +1190,9 @@ exclude_labels = ["dart"]
         let source = parse_source(
             "[templates.a]\ntemplate = \"a.json\"\nlabels = [\"rust\"]\n[templates.b]\ntemplate = \"b.json\"\n",
         );
-        let enabled = resolve_enabled_templates(&source, &empty_project()).unwrap();
+        let enabled =
+            resolve_enabled_templates(&source.templates, &source.default, &empty_project())
+                .unwrap();
         assert_eq!(enabled, BTreeSet::from(["a".to_string(), "b".to_string()]));
     }
 
@@ -1029,7 +1201,9 @@ exclude_labels = ["dart"]
         let source = parse_source(
             "[templates.a]\ntemplate = \"a.json\"\nlabels = [\"rust\"]\n[templates.b]\ntemplate = \"b.json\"\n[default]\ninclude_labels = [\"rust\"]\n",
         );
-        let enabled = resolve_enabled_templates(&source, &empty_project()).unwrap();
+        let enabled =
+            resolve_enabled_templates(&source.templates, &source.default, &empty_project())
+                .unwrap();
         assert_eq!(enabled, BTreeSet::from(["a".to_string()]));
     }
 
@@ -1038,7 +1212,9 @@ exclude_labels = ["dart"]
         let source = parse_source(
             "[templates.a]\ntemplate = \"a.json\"\nlabels = [\"rust\"]\n[default]\ninclude_labels = []\n",
         );
-        let enabled = resolve_enabled_templates(&source, &empty_project()).unwrap();
+        let enabled =
+            resolve_enabled_templates(&source.templates, &source.default, &empty_project())
+                .unwrap();
         assert!(enabled.is_empty());
     }
 
@@ -1047,7 +1223,9 @@ exclude_labels = ["dart"]
         let source = parse_source(
             "[templates.a]\ntemplate = \"a.json\"\nlabels = [\"rust\"]\n[templates.b]\ntemplate = \"b.json\"\n[default]\nexclude_labels = [\"rust\"]\n",
         );
-        let enabled = resolve_enabled_templates(&source, &empty_project()).unwrap();
+        let enabled =
+            resolve_enabled_templates(&source.templates, &source.default, &empty_project())
+                .unwrap();
         assert_eq!(enabled, BTreeSet::from(["b".to_string()]));
     }
 
@@ -1057,13 +1235,15 @@ exclude_labels = ["dart"]
             "[templates.a]\ntemplate = \"a.json\"\nlabels = [\"rust\"]\n[templates.b]\ntemplate = \"b.json\"\nlabels = [\"dart\"]\n[default]\ninclude_labels = [\"rust\"]\n",
         );
         let project = project_ref("path = \"x\"\nenable_labels = [\"dart\"]\n");
-        let enabled = resolve_enabled_templates(&source, &project).unwrap();
+        let enabled =
+            resolve_enabled_templates(&source.templates, &source.default, &project).unwrap();
         assert_eq!(enabled, BTreeSet::from(["a".to_string(), "b".to_string()]));
 
         let project = project_ref(
             "path = \"x\"\nenable_labels = [\"dart\"]\ndisable_labels = [\"rust\", \"dart\"]\n",
         );
-        let enabled = resolve_enabled_templates(&source, &project).unwrap();
+        let enabled =
+            resolve_enabled_templates(&source.templates, &source.default, &project).unwrap();
         assert!(enabled.is_empty());
     }
 
@@ -1071,7 +1251,8 @@ exclude_labels = ["dart"]
     fn unknown_project_label_rejected() {
         let source = parse_source("[templates.a]\ntemplate = \"a.json\"\nlabels = [\"rust\"]\n");
         let project = project_ref("path = \"x\"\nenable_labels = [\"nope\"]\n");
-        let err = resolve_enabled_templates(&source, &project).unwrap_err();
+        let err =
+            resolve_enabled_templates(&source.templates, &source.default, &project).unwrap_err();
         assert!(err.to_string().contains("unknown label `nope`"), "{err:?}");
     }
 
@@ -1081,7 +1262,8 @@ exclude_labels = ["dart"]
             "[templates.a]\ntemplate = \"a.json\"\nlabels = [\"rust\"]\n[templates.b]\ntemplate = \"b.json\"\nlabels = [\"dart\"]\n",
         );
         let project = project_ref("path = \"x\"\ninclude_templates = [\"b\"]\n");
-        let enabled = resolve_enabled_templates(&source, &project).unwrap();
+        let enabled =
+            resolve_enabled_templates(&source.templates, &source.default, &project).unwrap();
         assert_eq!(enabled, BTreeSet::from(["b".to_string()]));
     }
 
@@ -1091,7 +1273,8 @@ exclude_labels = ["dart"]
             "[templates.a]\ntemplate = \"a.json\"\nlabels = [\"rust\"]\n[templates.b]\ntemplate = \"b.json\"\n",
         );
         let project = project_ref("path = \"x\"\ninclude_templates = []\n");
-        let enabled = resolve_enabled_templates(&source, &project).unwrap();
+        let enabled =
+            resolve_enabled_templates(&source.templates, &source.default, &project).unwrap();
         assert!(enabled.is_empty());
     }
 
@@ -1104,7 +1287,8 @@ exclude_labels = ["dart"]
         let project = project_ref(
             "path = \"x\"\ninclude_templates = [\"a\", \"b\"]\nexclude_templates = [\"b\"]\n",
         );
-        let enabled = resolve_enabled_templates(&source, &project).unwrap();
+        let enabled =
+            resolve_enabled_templates(&source.templates, &source.default, &project).unwrap();
         assert_eq!(enabled, BTreeSet::from(["a".to_string()]));
     }
 
@@ -1112,17 +1296,149 @@ exclude_labels = ["dart"]
     fn unknown_template_name_rejected() {
         let source = parse_source("[templates.a]\ntemplate = \"a.json\"\n");
         let project = project_ref("path = \"x\"\ninclude_templates = [\"nope\"]\n");
-        let err = resolve_enabled_templates(&source, &project).unwrap_err();
+        let err =
+            resolve_enabled_templates(&source.templates, &source.default, &project).unwrap_err();
         let message = err.to_string();
         assert!(message.contains("unknown template `nope`"), "{message}");
         assert!(message.contains('a'), "{message}");
 
         let project = project_ref("path = \"x\"\nexclude_templates = [\"nope\"]\n");
-        let err = resolve_enabled_templates(&source, &project).unwrap_err();
+        let err =
+            resolve_enabled_templates(&source.templates, &source.default, &project).unwrap_err();
         assert!(
             err.to_string().contains("unknown template `nope`"),
             "{err:?}"
         );
+    }
+
+    fn resolved(source: &SourceFile) -> BTreeMap<String, Template> {
+        source
+            .resolved_templates(Path::new("templatry.source.toml"))
+            .expect("extends resolve")
+    }
+
+    #[test]
+    fn extends_merges_concrete_over_abstract() {
+        let source = parse_source(
+            "[abstract.base]\ngenerated_dir = \".\"\nstrategy = \"append_bottom\"\nlabels = [\"shared\"]\narray_policy = \"replace\"\n[templates.app]\ntemplate = \"a.json\"\nextends = \"base\"\nlabels = [\"apps\"]\n",
+        );
+        let merged = resolved(&source);
+        let app = &merged["app"];
+        assert_eq!(app.template.as_deref(), Some("a.json"));
+        assert_eq!(app.generated_dir.as_deref(), Some("."));
+        assert_eq!(app.strategy, Some(Strategy::AppendBottom));
+        assert_eq!(app.array_policy, Some(ArrayPolicy::Replace));
+        assert_eq!(
+            app.labels,
+            BTreeSet::from(["shared".to_string(), "apps".to_string()])
+        );
+        // No extends: passes through untouched, keeps its own values.
+        let plain = parse_source("[templates.app]\ntemplate = \"a.json\"\n");
+        let merged = resolved(&plain);
+        assert_eq!(merged["app"].generated_dir, None);
+        assert_eq!(merged["app"].extends, None);
+    }
+
+    #[test]
+    fn extends_backpropagate_prefers_explicit() {
+        for (concrete, abstracted, expected) in [
+            (None, None, None),
+            (None, Some(true), Some(true)),
+            (None, Some(false), Some(false)),
+            (Some(true), None, Some(true)),
+            (Some(false), Some(true), Some(false)),
+            (Some(true), Some(false), Some(true)),
+        ] {
+            let mut concrete_toml =
+                "[templates.app]\ntemplate = \"a.json\"\nextends = \"base\"\n".to_string();
+            if let Some(value) = concrete {
+                concrete_toml.push_str(&format!("back_propagate = {value}\n"));
+            }
+            let mut abstract_toml = "[abstract.base]\n".to_string();
+            if let Some(value) = abstracted {
+                abstract_toml.push_str(&format!("back_propagate = {value}\n"));
+            }
+            let source = parse_source(&format!("{abstract_toml}{concrete_toml}"));
+            let merged = resolved(&source);
+            assert_eq!(
+                merged["app"].back_propagate, expected,
+                "concrete {concrete:?} over abstract {abstracted:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn extends_unknown_abstract_rejected() {
+        let source = parse_source("[templates.app]\ntemplate = \"a.json\"\nextends = \"nope\"\n");
+        let err = source
+            .resolved_templates(Path::new("templatry.source.toml"))
+            .unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("unknown abstract `nope`"), "{message}");
+    }
+
+    #[test]
+    fn extends_unknown_abstract_lists_available() {
+        let source = parse_source(
+            "[abstract.base]\n[templates.app]\ntemplate = \"a.json\"\nextends = \"nope\"\n",
+        );
+        let err = source
+            .resolved_templates(Path::new("templatry.source.toml"))
+            .unwrap_err();
+        assert!(err.to_string().contains("available: base"), "{err:?}");
+    }
+
+    #[test]
+    fn extends_missing_template_rejected_at_validate() {
+        let dir = source_dir_with(&[]);
+        let source = parse_source("[templates.app]\nextends = \"base\"\n[abstract.base]\n");
+        let err = source.validate(dir.path(), &display()).unwrap_err();
+        assert!(err.to_string().contains("defines no `template`"), "{err:?}");
+    }
+
+    #[test]
+    fn extends_template_default_used() {
+        let dir = source_dir_with(&["shared.json"]);
+        let source = parse_source(
+            "[abstract.base]\ntemplate = \"shared.json\"\n[templates.a]\nextends = \"base\"\n[templates.b]\ntemplate = \"other.json\"\n",
+        );
+        // Concrete `b` names a missing file: resolution succeeds, validation
+        // fails on `b` only. Resolve first to prove the abstract default lands.
+        let merged = resolved(&source);
+        assert_eq!(merged["a"].template.as_deref(), Some("shared.json"));
+        assert_eq!(merged["b"].template.as_deref(), Some("other.json"));
+        let err = source.validate(dir.path(), &display()).unwrap_err();
+        assert!(err.to_string().contains("[templates.b]"), "{err:?}");
+    }
+
+    #[test]
+    fn extends_in_abstract_rejected_at_parse() {
+        let err = toml::from_str::<SourceFile>(
+            "[abstract.base]\nextends = \"other\"\n[templates.a]\ntemplate = \"a.json\"\n",
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("unknown field `extends`"),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn extends_empty_string_means_absent() {
+        let source = parse_source("[templates.app]\ntemplate = \"a.json\"\nextends = \"\"\n");
+        let merged = resolved(&source);
+        assert_eq!(merged["app"].template.as_deref(), Some("a.json"));
+    }
+
+    #[test]
+    fn extends_labels_union_resolves() {
+        let source = parse_source(
+            "[abstract.base]\nlabels = [\"shared\"]\n[templates.a]\ntemplate = \"a.json\"\nextends = \"base\"\nlabels = [\"apps\"]\n[templates.b]\ntemplate = \"b.json\"\n[default]\ninclude_labels = []\n",
+        );
+        let merged = resolved(&source);
+        let project = project_ref("path = \"x\"\nenable_labels = [\"shared\"]\n");
+        let enabled = resolve_enabled_templates(&merged, &source.default, &project).unwrap();
+        assert_eq!(enabled, BTreeSet::from(["a".to_string()]));
     }
 
     #[test]

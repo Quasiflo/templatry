@@ -1,0 +1,11 @@
+*.log
+target/
+
+# local
+secret.env
+
+*.o
+build/
+
+# local
+secret.env
