@@ -330,17 +330,7 @@ fn merge_into(
                 }
             }
             match policy {
-                ArrayPolicy::Union => {
-                    for item in over_items {
-                        if is_scalar(&item) {
-                            if !base_items.contains(&item) {
-                                base_items.push(item);
-                            }
-                        } else {
-                            base_items.push(item);
-                        }
-                    }
-                }
+                ArrayPolicy::Union => union_arrays(base_items, over_items),
                 ArrayPolicy::Replace => {
                     *base_items = over_items;
                 }
@@ -360,6 +350,23 @@ fn is_scalar(value: &Value) -> bool {
         value,
         Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_)
     )
+}
+
+/// Union override items into accumulated ones: scalars deduped, objects and
+/// arrays always appended. Shared by template+override merging and
+/// shared-destination combining so both unions behave identically. Appends in
+/// iteration order; callers pass contributions in sorted template-name order,
+/// keeping output deterministic.
+fn union_arrays(base_items: &mut Vec<Value>, over_items: Vec<Value>) {
+    for item in over_items {
+        if is_scalar(&item) {
+            if !base_items.contains(&item) {
+                base_items.push(item);
+            }
+        } else {
+            base_items.push(item);
+        }
+    }
 }
 
 fn display_path(path: &str) -> String {
@@ -519,14 +526,7 @@ fn combine_into(
             Ok(())
         }
         (Value::Array(combined_items), Value::Array(incoming_items)) => {
-            if combined_items != incoming_items {
-                return Err(conflict(
-                    contribution,
-                    &path,
-                    &Value::Array(combined_items.clone()),
-                    &Value::Array(incoming_items.clone()),
-                ));
-            }
+            union_arrays(combined_items, incoming_items.clone());
             Ok(())
         }
         (existing, incoming_value) => {
@@ -867,15 +867,50 @@ mod tests {
     }
 
     #[test]
-    fn shared_array_conflicts() {
+    fn shared_arrays_union() {
         let labels: BTreeSet<String> = BTreeSet::new();
-        let err = combine_structured(&[
+        // Disjoint scalars union; shared ones dedupe.
+        let combined = combine_structured(&[
             contribution("a", &labels, "{\"list\": [1, 2]}"),
-            contribution("b", &labels, "{\"list\": [1, 3]}"),
+            contribution("b", &labels, "{\"list\": [2, 3]}"),
         ])
-        .unwrap_err();
-        assert!(err.to_string().contains("`list`"), "{err:?}");
+        .unwrap();
+        assert_eq!(combined, json("{\"list\": [1, 2, 3]}"));
 
+        // Objects always append, even when equal.
+        let combined = combine_structured(&[
+            contribution("a", &labels, "{\"list\": [{\"x\": 1}]}"),
+            contribution("b", &labels, "{\"list\": [{\"x\": 1}]}"),
+        ])
+        .unwrap();
+        assert_eq!(combined, json("{\"list\": [{\"x\": 1}, {\"x\": 1}]}"));
+
+        // Equal arrays union to themselves.
+        let combined = combine_structured(&[
+            contribution("a", &labels, "{\"list\": [1]}"),
+            contribution("b", &labels, "{\"list\": [1]}"),
+        ])
+        .unwrap();
+        assert_eq!(combined, json("{\"list\": [1]}"));
+
+        // Union order follows contribution order (callers pass template-name
+        // order, keeping output deterministic).
+        let combined = combine_structured(&[
+            contribution("b", &labels, "{\"list\": [\"y\"]}"),
+            contribution("a", &labels, "{\"list\": [\"x\"]}"),
+        ])
+        .unwrap();
+        assert_eq!(combined, json("{\"list\": [\"y\", \"x\"]}"));
+
+        // Root-level arrays union like nested ones.
+        let combined = combine_structured(&[
+            contribution("a", &labels, "[1]"),
+            contribution("b", &labels, "[2]"),
+        ])
+        .unwrap();
+        assert_eq!(combined, json("[1, 2]"));
+
+        // Non-array leaves still combine idempotently.
         let unlabeled = combine_structured(&[
             contribution("a", &labels, "{\"x\": 1}"),
             contribution("b", &labels, "{\"x\": 1}"),

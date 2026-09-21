@@ -1,0 +1,9 @@
+[templates.rust-extensions]
+template = "rust.json"
+generated_file = "extensions.json"
+labels = ["rust"]
+
+[templates.dart-extensions]
+template = "dart.json"
+generated_file = "extensions.json"
+labels = ["dart"]

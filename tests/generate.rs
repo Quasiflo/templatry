@@ -50,6 +50,7 @@ fn all_generate_fixtures_are_known() {
             "merge-formats",
             "preserve-ignore",
             "replace-missing",
+            "shared-arrays",
             "shared-conflict",
             "shared-destination",
             "strategies",
@@ -93,6 +94,16 @@ async fn golden_shared_destination() {
         .await
         .expect("generate");
     common::assert_tree_matches(&root, &source_case("shared-destination").join("expected"));
+}
+
+#[tokio::test]
+async fn golden_shared_arrays() {
+    // Contributors with different arrays union instead of conflicting.
+    let (_temp, root) = setup("shared-arrays");
+    generate::run(&options(&root, |_| {}))
+        .await
+        .expect("generate");
+    common::assert_tree_matches(&root, &source_case("shared-arrays").join("expected"));
 }
 
 #[tokio::test]

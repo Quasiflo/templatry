@@ -350,6 +350,7 @@ struct MemberFiles {
     template_text: String,
     override_text: Option<String>,
     local_text: Option<String>,
+    override_path: PathBuf,
 }
 
 /// Read fresh file contents for every group member.
@@ -385,6 +386,7 @@ fn read_member_files(
                 template_text,
                 override_text,
                 local_text,
+                override_path,
             })
         })
         .collect()
@@ -415,6 +417,7 @@ fn snapshot_members<'a>(
             Ok(MemberView {
                 name: member.name.as_str(),
                 labels: &member.labels,
+                override_path: Some(&file.override_path),
                 template_text: file.template_text.as_str(),
                 override_text: file.override_text.as_deref(),
                 local_text: file.local_text.as_deref(),

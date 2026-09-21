@@ -29,6 +29,8 @@ pub struct MemberView<'a> {
     pub name: &'a str,
     /// Contributing template labels.
     pub labels: &'a BTreeSet<String>,
+    /// Override file path, when known (needed to collapse identical writes).
+    pub override_path: Option<&'a Path>,
     /// Current template file text.
     pub template_text: &'a str,
     /// Current override file text (`None` when missing).
@@ -740,7 +742,12 @@ fn try_candidates(
                 } else {
                     Some(merge::serialize_doc(&tentative, format)?)
                 };
-                passing.push((candidate.name, new_override_text, restored));
+                passing.push((
+                    candidate.name,
+                    candidate.override_path.map(Path::to_path_buf),
+                    new_override_text,
+                    restored,
+                ));
             }
             Err(reason) => {
                 tracing::debug!(
@@ -763,7 +770,7 @@ fn try_candidates(
             ))
         }
         1 => {
-            let (name, new_override_text, replay_bytes) =
+            let (name, _, new_override_text, replay_bytes) =
                 passing.pop().expect("one passing candidate");
             Ok(BackpropOutcome::Applied {
                 member: name.to_string(),
@@ -772,7 +779,19 @@ fn try_candidates(
             })
         }
         _ => {
-            let mut names: Vec<&str> = passing.iter().map(|(name, _, _)| *name).collect();
+            // Collapse when every passing candidate writes identical bytes to
+            // the same override file (shared override files): the outcome is
+            // fully determined, so attribution is moot.
+            if collapsing(&passing) {
+                let (name, _, new_override_text, replay_bytes) =
+                    passing.into_iter().next().expect("passing is non-empty");
+                return Ok(BackpropOutcome::Applied {
+                    member: name.to_string(),
+                    new_override_text,
+                    replay_bytes,
+                });
+            }
+            let mut names: Vec<&str> = passing.iter().map(|(name, _, _, _)| *name).collect();
             names.sort();
             Err(crate::invalid(
                 dest,
@@ -787,6 +806,24 @@ fn try_candidates(
             ))
         }
     }
+}
+
+/// One passing candidate: template name, override path, override text, replay bytes.
+type Passing<'a> = (&'a str, Option<PathBuf>, Option<String>, Vec<u8>);
+
+/// True when all passing candidates agree on file, content, and replay.
+fn collapsing(passing: &[Passing<'_>]) -> bool {
+    let [(_, first_path, first_text, first_replay), rest @ ..] = passing else {
+        return false;
+    };
+    let (Some(first_path), Some(first_text)) = (first_path, first_text) else {
+        return false;
+    };
+    rest.iter().all(|(_, path, text, replay)| {
+        path.as_ref() == Some(first_path)
+            && text.as_ref() == Some(first_text)
+            && replay == first_replay
+    })
 }
 
 /// What the safety replay compares against and recovers from.
@@ -1089,9 +1126,30 @@ mod tests {
         local_text: Option<&'a str>,
         strategy: EffectiveStrategy,
     ) -> MemberView<'a> {
+        viewed_member(
+            name,
+            label_set,
+            None,
+            template_text,
+            override_text,
+            local_text,
+            strategy,
+        )
+    }
+
+    fn viewed_member<'a>(
+        name: &'a str,
+        label_set: &'a BTreeSet<String>,
+        override_path: Option<&'a Path>,
+        template_text: &'a str,
+        override_text: Option<&'a str>,
+        local_text: Option<&'a str>,
+        strategy: EffectiveStrategy,
+    ) -> MemberView<'a> {
         MemberView {
             name,
             labels: label_set,
+            override_path,
             template_text,
             override_text,
             local_text,
@@ -1269,6 +1327,75 @@ mod tests {
         assert!(message.contains("ambiguous"), "{message}");
         assert!(message.contains("rust-part"), "{message}");
         assert!(message.contains("dart-part"), "{message}");
+    }
+
+    #[test]
+    fn identical_writes_to_a_shared_override_collapse() {
+        // Same override file, same fold, same replay: attribution is moot.
+        let shared = Path::new("shared.json");
+        let rust = labels(&["rust"]);
+        let dart = labels(&["dart"]);
+        let last = last_of("{\"a\": 1}", None);
+        let current = b"{\"a\": 1, \"z\": 3}\n";
+        let members = [
+            viewed_member(
+                "rust-part",
+                &rust,
+                Some(shared),
+                "{\"a\": 1}",
+                None,
+                None,
+                EffectiveStrategy::Structured(DocFormat::Json),
+            ),
+            viewed_member(
+                "dart-part",
+                &dart,
+                Some(shared),
+                "{\"a\": 1}",
+                None,
+                None,
+                EffectiveStrategy::Structured(DocFormat::Json),
+            ),
+        ];
+        let outcome = backpropagate(Path::new("out.json"), &last, current, &members).unwrap();
+        let (_, text, replay) = applied_override(outcome);
+        assert_eq!(parse(&text), parse("{\"z\": 3}"));
+        assert_eq!(
+            parse(std::str::from_utf8(&replay).unwrap()),
+            parse("{\"a\": 1, \"z\": 3}")
+        );
+    }
+
+    #[test]
+    fn identical_text_different_files_stay_ambiguous() {
+        // Same folded content but different override files: still ambiguous,
+        // since two files would change.
+        let rust = labels(&["rust"]);
+        let dart = labels(&["dart"]);
+        let last = last_of("{\"a\": 1}", None);
+        let current = b"{\"a\": 1, \"z\": 3}\n";
+        let members = [
+            viewed_member(
+                "rust-part",
+                &rust,
+                Some(Path::new("rust.json")),
+                "{\"a\": 1}",
+                None,
+                None,
+                EffectiveStrategy::Structured(DocFormat::Json),
+            ),
+            viewed_member(
+                "dart-part",
+                &dart,
+                Some(Path::new("dart.json")),
+                "{\"a\": 1}",
+                None,
+                None,
+                EffectiveStrategy::Structured(DocFormat::Json),
+            ),
+        ];
+        let err = backpropagate(Path::new("out.json"), &last, current, &members).unwrap_err();
+        assert!(err.to_string().contains("ambiguous"), "{err:?}");
     }
 
     #[test]
