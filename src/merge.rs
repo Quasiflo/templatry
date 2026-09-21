@@ -104,15 +104,15 @@ pub fn family_of(template: &Template, generated_filename: &str) -> crate::Result
 pub fn parse_doc(text: &str, format: DocFormat, origin: &str) -> crate::Result<Value> {
     let context = Path::new(origin);
     match format {
-        DocFormat::Json => serde_json::from_str(text)
-            .map_err(|err| crate::invalid(context, format!("is not valid JSON: {err}"))),
-        DocFormat::JsonC => {
+        // JSON is lenient: comments are stripped (VS Code settings and
+        // friends are typically `.json` but allow comments).
+        DocFormat::Json | DocFormat::JsonC => {
             let mut owned = text.to_string();
             json_strip_comments::strip(&mut owned).map_err(|err| {
-                crate::invalid(context, format!("cannot strip JSONC comments: {err}"))
+                crate::invalid(context, format!("cannot strip JSON comments: {err}"))
             })?;
             serde_json::from_str(&owned)
-                .map_err(|err| crate::invalid(context, format!("is not valid JSONC: {err}")))
+                .map_err(|err| crate::invalid(context, format!("is not valid JSON: {err}")))
         }
         DocFormat::Yaml => yaml_serde::from_str(text)
             .map_err(|err| crate::invalid(context, format!("is not valid YAML: {err}"))),
@@ -664,7 +664,23 @@ mod tests {
     #[test]
     fn format_bridges_parse() {
         assert_eq!(
-            parse_doc("{\"a\": 1}", DocFormat::Json, "t").unwrap(),
+            parse_doc(
+                "// comment\n{\"a\": 1 /* trailing */}",
+                DocFormat::JsonC,
+                "t"
+            )
+            .unwrap(),
+            json("{\"a\": 1}")
+        );
+        // Plain JSON is lenient too: VS Code settings and friends are
+        // typically `.json` but allow comments.
+        assert_eq!(
+            parse_doc(
+                "// comment\n{\"a\": 1 /* trailing */}",
+                DocFormat::Json,
+                "t"
+            )
+            .unwrap(),
             json("{\"a\": 1}")
         );
         assert_eq!(

@@ -150,7 +150,7 @@ Omitted `strategy` auto-detects on the generated filename: `json`, `jsonc`, `yam
 | Strategy        | Behavior |
 | --------------- | -------- |
 | (auto)          | Structured deep merge for known extensions, else `append_bottom` |
-| `merge_json`    | Structured deep merge as JSON (comments stripped) |
+| `merge_json`    | Structured deep merge as JSON (comments stripped, like auto-detected `.json`) |
 | `merge_yaml`    | Structured deep merge as YAML |
 | `merge_toml`    | Structured deep merge as TOML |
 | `append_top`    | Precedence-ordered segments: local, override, template (missing layers skipped) |
