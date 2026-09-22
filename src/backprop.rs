@@ -96,13 +96,17 @@ impl IgnorePattern {
     }
 
     /// True for the pattern's own path and everything beneath it.
+    ///
+    /// Each path segment is split on dots first, so a flat dotted key and
+    /// its nested equivalent address the same setting.
     pub fn matches(&self, path: &[String]) -> bool {
-        if path.len() < self.segments.len() {
+        let atoms: Vec<&str> = path.iter().flat_map(|segment| segment.split('.')).collect();
+        if atoms.len() < self.segments.len() {
             return false;
         }
         self.segments
             .iter()
-            .zip(path.iter())
+            .zip(atoms.iter())
             .all(|(segment, actual)| match segment {
                 PatternSegment::Any => true,
                 PatternSegment::Exact(want) => want == actual,
@@ -565,9 +569,10 @@ pub(crate) fn preserve_maintained(
 /// Merge maintained state from disk into fresh output.
 ///
 /// Ignored paths take the on-disk subtree wholesale when present (and are
-/// removed when the disk lacks them); value-ignored paths take the on-disk
-/// subtree when present but keep merged output otherwise, so template-side
-/// presence changes still flow. Non-matching paths keep merged output.
+/// removed when the disk lacks them, including user-added keys the pipeline
+/// never produced); value-ignored paths take the on-disk subtree when present
+/// but keep merged output otherwise, so template-side presence changes still
+/// flow. Non-matching paths keep merged output.
 fn restore_into(
     out: &mut Value,
     disk: &Value,
@@ -601,6 +606,20 @@ fn restore_into(
     }
     for key in remove {
         out_map.remove(&key);
+    }
+    // User-maintained keys the pipeline never produced still persist.
+    // Values-lists are excluded: their presence follows the merge, and adds
+    // already fold through the override.
+    for (key, disk_value) in disk_map {
+        if out_map.contains_key(key) {
+            continue;
+        }
+        path.push(key.clone());
+        let ignored = matches_any(path, keys);
+        path.pop();
+        if ignored {
+            out_map.insert(key.clone(), disk_value.clone());
+        }
     }
 }
 
@@ -779,9 +798,8 @@ fn try_candidates(
             })
         }
         _ => {
-            // Collapse when every passing candidate writes identical bytes to
-            // the same override file (shared override files): the outcome is
-            // fully determined, so attribution is moot.
+            // Collapse when every passing candidate agrees on every
+            // observable outcome (see `collapsing`).
             if collapsing(&passing) {
                 let (name, _, new_override_text, replay_bytes) =
                     passing.into_iter().next().expect("passing is non-empty");
@@ -811,19 +829,30 @@ fn try_candidates(
 /// One passing candidate: template name, override path, override text, replay bytes.
 type Passing<'a> = (&'a str, Option<PathBuf>, Option<String>, Vec<u8>);
 
-/// True when all passing candidates agree on file, content, and replay.
+/// True when all passing candidates agree on every observable outcome.
+///
+/// Outcomes are the replay bytes plus the set of override writes, where a
+/// `None` text means no write. Candidates that fold nothing therefore
+/// collapse regardless of paths; divergent writes stay ambiguous. A write to
+/// an unknown file can never collapse.
 fn collapsing(passing: &[Passing<'_>]) -> bool {
-    let [(_, first_path, first_text, first_replay), rest @ ..] = passing else {
+    let [(_, _, _, first_replay), rest @ ..] = passing else {
         return false;
     };
-    let (Some(first_path), Some(first_text)) = (first_path, first_text) else {
+    if rest.iter().any(|(_, _, _, replay)| replay != first_replay) {
         return false;
-    };
-    rest.iter().all(|(_, path, text, replay)| {
-        path.as_ref() == Some(first_path)
-            && text.as_ref() == Some(first_text)
-            && replay == first_replay
-    })
+    }
+    let mut writes = std::collections::BTreeSet::new();
+    for (_, path, text, _) in passing {
+        match (path, text) {
+            (Some(path), Some(text)) => {
+                writes.insert((path.clone(), text.clone()));
+            }
+            (_, None) => {}
+            (None, Some(_)) => return false,
+        }
+    }
+    writes.len() <= 1
 }
 
 /// What the safety replay compares against and recovers from.
@@ -886,8 +915,16 @@ fn safety_replay(
     let tentative_text = merge::serialize_doc(tentative, format).map_err(|err| format!("{err}"))?;
     let mut contributions = Vec::with_capacity(members.len());
     for member in members {
+        // A fold that changed nothing replays the original override state:
+        // serializing a Null tentative would pass explicit JSON `null`,
+        // which replaces the whole document, while a missing override
+        // skips the merge entirely.
         let text = if member.name == candidate.name {
-            Some(tentative_text.as_str())
+            if tentative.is_null() && member.override_text.is_none() {
+                None
+            } else {
+                Some(tentative_text.as_str())
+            }
         } else {
             member.override_text
         };
@@ -1337,7 +1374,7 @@ mod tests {
         let dart = labels(&["dart"]);
         let last = last_of("{\"a\": 1}", None);
         let current = b"{\"a\": 1, \"z\": 3}\n";
-        let members = [
+        let mut members = [
             viewed_member(
                 "rust-part",
                 &rust,
@@ -1357,13 +1394,30 @@ mod tests {
                 EffectiveStrategy::Structured(DocFormat::Json),
             ),
         ];
+        for member in &mut members {
+            member.ignore_keys = vec![IgnorePattern::parse("z").unwrap()];
+        }
+        // All ops filter out in every candidate, no override files exist:
+        // attribution is moot, the restored replay applies, no rewrite.
         let outcome = backpropagate(Path::new("out.json"), &last, current, &members).unwrap();
-        let (_, text, replay) = applied_override(outcome);
-        assert_eq!(parse(&text), parse("{\"z\": 3}"));
-        assert_eq!(
-            parse(std::str::from_utf8(&replay).unwrap()),
-            parse("{\"a\": 1, \"z\": 3}")
-        );
+        match outcome {
+            BackpropOutcome::Applied {
+                member,
+                new_override_text,
+                replay_bytes,
+            } => {
+                assert!(
+                    new_override_text.is_none(),
+                    "nothing folded, nothing to write"
+                );
+                assert_eq!(
+                    parse(std::str::from_utf8(&replay_bytes).unwrap()),
+                    parse("{\"a\": 1, \"z\": 3}")
+                );
+                assert!(["rust-part", "dart-part"].contains(&member.as_str()));
+            }
+            BackpropOutcome::NoChange => panic!("expected Applied"),
+        }
     }
 
     #[test]
@@ -1396,6 +1450,59 @@ mod tests {
         ];
         let err = backpropagate(Path::new("out.json"), &last, current, &members).unwrap_err();
         assert!(err.to_string().contains("ambiguous"), "{err:?}");
+    }
+
+    #[test]
+    fn no_writes_anywhere_collapses_regardless_of_paths() {
+        // Every op filters out, so no candidate writes anything and all
+        // replays match: the differing (but write-free) override paths do
+        // not make this ambiguous.
+        let rust = labels(&["rust"]);
+        let dart = labels(&["dart"]);
+        let last = last_of("{\"a\": 1}", None);
+        let current = b"{\"a\": 1, \"z\": 3}\n";
+        let members = [
+            viewed_member(
+                "rust-part",
+                &rust,
+                Some(Path::new("rust.json")),
+                "{\"a\": 1}",
+                None,
+                None,
+                EffectiveStrategy::Structured(DocFormat::Json),
+            ),
+            viewed_member(
+                "dart-part",
+                &dart,
+                Some(Path::new("dart.json")),
+                "{\"a\": 1}",
+                None,
+                None,
+                EffectiveStrategy::Structured(DocFormat::Json),
+            ),
+        ];
+        let mut ignored = members;
+        for member in &mut ignored {
+            member.ignore_keys = vec![IgnorePattern::parse("z").unwrap()];
+        }
+        let outcome = backpropagate(Path::new("out.json"), &last, current, &ignored).unwrap();
+        match outcome {
+            BackpropOutcome::Applied {
+                new_override_text,
+                replay_bytes,
+                ..
+            } => {
+                assert!(
+                    new_override_text.is_none(),
+                    "nothing folded, nothing to write"
+                );
+                assert_eq!(
+                    parse(std::str::from_utf8(&replay_bytes).unwrap()),
+                    parse("{\"a\": 1, \"z\": 3}")
+                );
+            }
+            BackpropOutcome::NoChange => panic!("expected Applied"),
+        }
     }
 
     #[test]
@@ -1551,6 +1658,74 @@ mod tests {
             parse(std::str::from_utf8(&replay).unwrap()),
             parse("{\"k\": 2, \"u\": \"new\", \"n\": true}")
         );
+    }
+
+    #[test]
+    fn flat_dotted_ignored_key_stays_maintained() {
+        // VS Code shape: flat dotted keys. Editing an ignored one folds
+        // nothing and preserves the value; editing a sibling folds normally.
+        let labels = labels(&["common"]);
+        let template_text = "{\"editor.fontSize\": 14, \"java.jdt.ls.java.home\": \"/tpl\"}";
+        let last = last_of(template_text, None);
+        let current = b"{\"editor.fontSize\": 16, \"java.jdt.ls.java.home\": \"/hand\"}\n";
+        let mut member = json_member("settings", &labels, template_text, None);
+        member.ignore_keys = vec![pattern("java.jdt.ls.java.home")];
+        let outcome = backpropagate(Path::new("settings.json"), &last, current, &[member]).unwrap();
+        match outcome {
+            BackpropOutcome::Applied {
+                new_override_text,
+                replay_bytes,
+                ..
+            } => {
+                // Only the sibling folds; the ignored key is absent.
+                assert_eq!(
+                    parse(&new_override_text.expect("override written")),
+                    parse("{\"editor.fontSize\": 16}")
+                );
+                assert_eq!(
+                    parse(std::str::from_utf8(&replay_bytes).unwrap()),
+                    parse("{\"editor.fontSize\": 16, \"java.jdt.ls.java.home\": \"/hand\"}")
+                );
+            }
+            BackpropOutcome::NoChange => panic!("expected Applied"),
+        }
+    }
+
+    #[test]
+    fn ignored_only_edit_without_override_applies() {
+        // All ops filter out and no override file exists: the tentative
+        // stays Null, which must replay as a *missing* override (skipping
+        // the merge), not as explicit JSON null (which would replace the
+        // whole document and fail safety). Regression test for ignored
+        // machine-path edits with no override file present.
+        let labels = labels(&["common"]);
+        let template_text =
+            "{\"java.jdt.ls.java.home\": \"/tpl\", \"java.import.gradle.java.home\": \"/tpl\"}";
+        let last = last_of(template_text, None);
+        let current =
+            b"{\"java.jdt.ls.java.home\": \"/hand\", \"java.import.gradle.java.home\": \"/hand\"}\n";
+        let mut member = json_member("settings", &labels, template_text, None);
+        member.ignore_keys = vec![
+            pattern("java.jdt.ls.java.home"),
+            pattern("java.import.gradle.java.home"),
+        ];
+        let outcome = backpropagate(Path::new("settings.json"), &last, current, &[member]).unwrap();
+        match outcome {
+            BackpropOutcome::Applied {
+                new_override_text,
+                replay_bytes,
+                ..
+            } => {
+                assert!(new_override_text.is_none(), "no override to write");
+                assert_eq!(
+                    parse(std::str::from_utf8(&replay_bytes).unwrap()),
+                    parse(
+                        "{\"java.jdt.ls.java.home\": \"/hand\", \"java.import.gradle.java.home\": \"/hand\"}"
+                    )
+                );
+            }
+            BackpropOutcome::NoChange => panic!("expected Applied"),
+        }
     }
 
     #[test]
@@ -1814,6 +1989,24 @@ mod tests {
         assert!(nested.matches(&path(&["a", "b", "c"])));
         assert!(!nested.matches(&path(&["a", "b"])));
         assert!(nested.matches(&path(&["a", "b", "c", "d"])));
+    }
+
+    #[test]
+    fn ignore_patterns_match_flat_dotted_keys() {
+        // VS Code settings norm: one map key holding dots.
+        let java_home = pattern("java.jdt.ls.java.home");
+        assert!(java_home.matches(&path(&["java.jdt.ls.java.home"])));
+        assert!(!java_home.matches(&path(&["java.jdt.ls.other.home"])));
+        assert!(!java_home.matches(&path(&["java"])));
+
+        // Flat keys match nested paths and vice versa: same setting.
+        assert!(java_home.matches(&path(&["java", "jdt", "ls", "java.home"])));
+
+        // Wildcards and subtrees work on flat keys too.
+        let machine = pattern("machine.*");
+        assert!(machine.matches(&path(&["machine.cpu"])));
+        assert!(machine.matches(&path(&["machine.cpu", "cores"])));
+        assert!(!machine.matches(&path(&["machine"])));
     }
 
     #[test]
