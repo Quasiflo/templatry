@@ -47,6 +47,64 @@ pub struct ResolvedSource {
     pub source_id: String,
 }
 
+/// One named project source after resolution: its configured name plus the
+/// resolution result. The name is empty for singular `[source]` projects.
+#[derive(Debug, Clone)]
+pub struct NamedSource {
+    /// Configured source name (`""` for singular projects).
+    pub name: String,
+    /// Source kind that was resolved.
+    pub kind: SourceKind,
+    /// Directory holding `templatry.source.toml` (cache entry or local path).
+    pub root_dir: PathBuf,
+    /// Whether the entry came from the cache without fetching.
+    pub from_cache: bool,
+    /// Hex cache key over the canonical source configuration.
+    pub source_id: String,
+}
+
+/// Resolve every source a project declares, in [`crate::config::ProjectConfig::project_sources`]
+/// order (singular first, else alphabetically by name).
+///
+/// Each source resolves independently through [`resolve`]; failures name the
+/// source they came from. Callers merge the results after per-source
+/// validation (see [`crate::config::merge_active_templates`]).
+pub async fn resolve_all(
+    project: &crate::config::ProjectConfig,
+    project_root: &Path,
+    offline: bool,
+) -> crate::Result<Vec<NamedSource>> {
+    let mut resolved = Vec::new();
+    for (name, source) in project.project_sources() {
+        let single = resolve(source, project_root, offline)
+            .await
+            .map_err(|err| {
+                if name.is_empty() {
+                    return err;
+                }
+                match err {
+                    crate::Error::Invalid { path, message } => crate::Error::Invalid {
+                        path,
+                        message: format!("source `{name}`: {message}"),
+                    },
+                    crate::Error::Parse { path, message } => crate::Error::Parse {
+                        path,
+                        message: format!("source `{name}`: {message}"),
+                    },
+                    other => other,
+                }
+            })?;
+        resolved.push(NamedSource {
+            name,
+            kind: single.kind,
+            root_dir: single.root_dir,
+            from_cache: single.from_cache,
+            source_id: single.source_id,
+        });
+    }
+    Ok(resolved)
+}
+
 /// Resolve a source reference against the cache, fetching on miss.
 ///
 /// `project_root` is the repository root (see [`crate::config::project_root`]):
@@ -1019,7 +1077,7 @@ mod tests {
     fn parse_project_ref(body: &str) -> SourceRef {
         let project: ProjectConfig =
             toml::from_str(&format!("[source]\n{body}")).expect("project fixture parses");
-        project.source
+        project.source.expect("singular test project")
     }
 
     fn temp_cache() -> tempfile::TempDir {

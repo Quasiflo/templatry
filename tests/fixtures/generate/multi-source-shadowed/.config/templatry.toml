@@ -1,0 +1,6 @@
+[source.a]
+path = "templates-a"
+exclude_templates = ["app"]
+
+[source.b]
+path = "templates-b"

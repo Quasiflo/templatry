@@ -80,14 +80,94 @@ pub(crate) struct ProjectContext {
     pub project_file: PathBuf,
     /// Repository root: base for override, generated, and local-source paths.
     pub project_root: PathBuf,
+    /// Per-source state in resolution order (singular first, else by name).
+    pub entries: Vec<ContextEntry>,
+}
+
+/// One resolved project source: its validated definition plus selection.
+#[derive(Debug, Clone)]
+pub(crate) struct ContextEntry {
+    /// Configured source name (`""` for singular projects).
+    pub name: String,
     /// Source root holding `templatry.source.toml`.
-    pub source_root: PathBuf,
-    /// Validated source definition.
+    pub root_dir: PathBuf,
+    /// Validated source definition (raw templates, pre-`extends`).
     pub source: SourceFile,
+    /// `extends`-resolved templates (all, not just enabled).
+    pub resolved: BTreeMap<String, Template>,
     /// Enabled template names, sorted.
-    pub enabled: Vec<String>,
+    pub enabled: BTreeSet<String>,
     /// Source kind (local sources also watch their source file).
     pub kind: SourceKind,
+}
+
+/// One loaded source plus its shadowed-duplicate warnings, if any.
+pub(crate) struct LoadedProject {
+    /// Per-source state in resolution order.
+    pub entries: Vec<ContextEntry>,
+    /// Shadowed-duplicate warnings (same name defined in several sources but
+    /// enabled in exactly one); printed by `validate`, ignored by `generate`.
+    pub warnings: Vec<String>,
+}
+
+/// Locate, resolve, load, validate, and select: everything before rendering.
+///
+/// Every source resolves independently, runs abstract substitution and label
+/// filtering within its own scope, then merges into one ordered template set
+/// (see [`config::merge_active_templates`]).
+pub(crate) async fn load_project_sources(
+    project: &ProjectConfig,
+    project_file: &Path,
+    project_root: &Path,
+    offline: bool,
+) -> crate::Result<LoadedProject> {
+    let named = crate::source::resolve_all(project, project_root, offline).await?;
+    let refs = project.project_sources();
+    let mut entries = Vec::with_capacity(named.len());
+    for (source, (_, project_ref)) in named.iter().zip(refs) {
+        let source_file = source.root_dir.join(SOURCE_CONFIG_FILENAME);
+        let content = crate::read_file(&source_file)?;
+        let file: SourceFile = crate::parse_toml(&source_file, &content)?;
+        file.validate(&source.root_dir, &source_file)?;
+        let resolved = file.resolved_templates(&source_file)?;
+        let enabled = config::resolve_enabled_templates(&resolved, &file.default, project_ref)?;
+        entries.push(ContextEntry {
+            name: source.name.clone(),
+            root_dir: source.root_dir.clone(),
+            source: file,
+            resolved,
+            enabled,
+            kind: source.kind,
+        });
+    }
+    let views: Vec<config::SourceView<'_>> = entries
+        .iter()
+        .map(|entry| config::SourceView {
+            name: entry.name.as_str(),
+            templates: &entry.resolved,
+            enabled: &entry.enabled,
+            configs: &entry.source.configs,
+        })
+        .collect();
+    let (_merged, warnings) = config::merge_active_templates(&views)?;
+    config::validate_merged_destinations(&merged_active(&entries), project_file)?;
+    Ok(LoadedProject { entries, warnings })
+}
+
+/// Active templates across all entries in (source, template) order.
+fn merged_active(entries: &[ContextEntry]) -> Vec<config::ActiveTemplate> {
+    let mut merged = Vec::new();
+    for entry in entries {
+        for name in &entry.enabled {
+            merged.push(config::ActiveTemplate {
+                source: entry.name.clone(),
+                name: name.clone(),
+                template: entry.resolved[name].clone(),
+                configs: entry.source.configs.clone(),
+            });
+        }
+    }
+    merged
 }
 
 /// Locate, resolve, load, validate, and select: everything before rendering.
@@ -95,48 +175,51 @@ pub(crate) async fn load_context(options: &Options) -> crate::Result<ProjectCont
     let (project_file, project_root) = locate_project(options.config.as_deref())?;
     let content = crate::read_file(&project_file)?;
     let project: ProjectConfig = crate::parse_toml(&project_file, &content)?;
-    let resolved = crate::source::resolve(&project.source, &project_root, options.offline).await?;
-    let source_file = resolved.root_dir.join(SOURCE_CONFIG_FILENAME);
-    let content = crate::read_file(&source_file)?;
-    let mut source: SourceFile = crate::parse_toml(&source_file, &content)?;
-    source.validate(&resolved.root_dir, &source_file)?;
-    source.templates = source.resolved_templates(&source_file)?;
-    let enabled =
-        config::resolve_enabled_templates(&source.templates, &source.default, &project.source)?;
+    let loaded =
+        load_project_sources(&project, &project_file, &project_root, options.offline).await?;
     Ok(ProjectContext {
         project_file,
         project_root,
-        source_root: resolved.root_dir,
-        source,
-        enabled: enabled.into_iter().collect(),
-        kind: resolved.kind,
+        entries: loaded.entries,
     })
 }
 
 /// One destination group member: everything needed to re-render it on change.
 #[derive(Debug, Clone)]
 pub(crate) struct GroupMember {
+    /// Display name: bare for singular projects, `source:template` when merged.
     pub name: String,
     pub labels: BTreeSet<String>,
     pub template: Template,
+    /// Owning source's root: template files read from here.
+    pub source_root: PathBuf,
+    /// Owning source's `[configs]` defaults for override directories.
+    pub configs: Configs,
 }
 
 /// Group enabled templates by destination file.
+///
+/// Entries arrive in (source, template) order, so array unions and text
+/// concatenations spanning sources stay deterministic.
 pub(crate) fn group_members(
     context: &ProjectContext,
 ) -> crate::Result<BTreeMap<PathBuf, Vec<GroupMember>>> {
     let mut groups: BTreeMap<PathBuf, Vec<GroupMember>> = BTreeMap::new();
-    for name in &context.enabled {
-        let template = &context.source.templates[name];
-        let dest = context
-            .project_root
-            .join(template.resolved_generated_dir(&context.source.configs))
-            .join(template.resolved_generated_file()?);
-        groups.entry(dest).or_default().push(GroupMember {
-            name: name.clone(),
-            labels: template.labels.clone(),
-            template: template.clone(),
-        });
+    for entry in &context.entries {
+        for name in &entry.enabled {
+            let template = &entry.resolved[name];
+            let dest = context
+                .project_root
+                .join(template.resolved_generated_dir(&entry.source.configs))
+                .join(template.resolved_generated_file()?);
+            groups.entry(dest).or_default().push(GroupMember {
+                name: config::qualified_name(&entry.name, name),
+                labels: template.labels.clone(),
+                template: template.clone(),
+                source_root: entry.root_dir.clone(),
+                configs: entry.source.configs.clone(),
+            });
+        }
     }
     Ok(groups)
 }
@@ -162,9 +245,9 @@ pub(crate) fn render_group(
         let (output, mode) = render_template(
             &member.template,
             &member.name,
-            &context.source_root,
+            &member.source_root,
             &context.project_root,
-            &context.source.configs,
+            &member.configs,
         )?;
         rendered.push((member.name.as_str(), &member.labels, output));
         modes.push(mode);

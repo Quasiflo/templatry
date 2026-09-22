@@ -1,0 +1,4 @@
+[templates.dart-settings]
+template = "dart-settings.json"
+generated_file = "dart-settings.json"
+labels = ["dart"]

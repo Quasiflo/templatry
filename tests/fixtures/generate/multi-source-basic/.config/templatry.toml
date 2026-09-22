@@ -1,0 +1,5 @@
+[source.rust]
+path = "templates-rust"
+
+[source.dart]
+path = "templates-dart"

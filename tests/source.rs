@@ -41,7 +41,11 @@ async fn local_source_resolves_end_to_end() {
     // canonical `.config/templatry.toml` layout derives via project_root.
     let project_root = templatry::config::project_root(&project_file);
 
-    let first = templatry::source::resolve(&project.source, &project_root, true)
+    let sources = project.project_sources();
+    assert_eq!(sources.len(), 1);
+    let (_, source) = &sources[0];
+
+    let first = templatry::source::resolve(source, &project_root, true)
         .await
         .expect("local resolves offline");
     assert!(!first.from_cache);
@@ -51,7 +55,7 @@ async fn local_source_resolves_end_to_end() {
     );
     assert_eq!(first.source_id.len(), 64);
 
-    let second = templatry::source::resolve(&project.source, &project_root, true)
+    let second = templatry::source::resolve(source, &project_root, true)
         .await
         .expect("local resolves again");
     assert_eq!(first.source_id, second.source_id);

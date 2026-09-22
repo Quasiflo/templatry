@@ -1,0 +1,4 @@
+[templates.a]
+template = "a.json"
+generated_file = "shared.json"
+back_propagate = true

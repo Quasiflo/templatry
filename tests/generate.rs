@@ -48,6 +48,12 @@ fn all_generate_fixtures_are_known() {
             "labels",
             "local-chain",
             "merge-formats",
+            "multi-source-abstract-scope",
+            "multi-source-basic",
+            "multi-source-conflict",
+            "multi-source-samename",
+            "multi-source-shadowed",
+            "multi-source-shared",
             "none-copy",
             "preserve-ignore",
             "replace-missing",
@@ -137,6 +143,88 @@ async fn shared_conflict_errors() {
     let message = err.to_string();
     assert!(message.contains("conflicting values"), "{message}");
     assert!(message.contains("`editor.size`"), "{message}");
+}
+
+#[tokio::test]
+async fn golden_multi_source_basic() {
+    // Disjoint destinations across sources generate side by side.
+    let (_temp, root) = setup("multi-source-basic");
+    generate::run(&options(&root, |_| {}))
+        .await
+        .expect("generate");
+    common::assert_tree_matches(&root, &source_case("multi-source-basic").join("expected"));
+}
+
+#[tokio::test]
+async fn golden_multi_source_shared() {
+    // Same destination across sources unions in (source, template) order.
+    let (_temp, root) = setup("multi-source-shared");
+    generate::run(&options(&root, |_| {}))
+        .await
+        .expect("generate");
+    common::assert_tree_matches(&root, &source_case("multi-source-shared").join("expected"));
+    let merged = std::fs::read_to_string(
+        root.join(".config")
+            .join("generated")
+            .join("extensions.json"),
+    )
+    .expect("read merged");
+    let alpha = merged.find("alpha-ext").expect("alpha first");
+    let shared = merged.find("shared").expect("shared middle");
+    let beta = merged.find("beta-ext").expect("beta last");
+    assert!(alpha < shared && shared < beta, "{merged}");
+}
+
+#[tokio::test]
+async fn multi_source_conflict_names_qualified_templates() {
+    let (_temp, root) = setup("multi-source-conflict");
+    let err = generate::run(&options(&root, |_| {}))
+        .await
+        .expect_err("conflicting leaves");
+    let message = err.to_string();
+    assert!(message.contains("conflicting values"), "{message}");
+    assert!(message.contains("`editor.size`"), "{message}");
+    // The offending template renders source-qualified through merge errors.
+    assert!(message.contains("beta:beta-settings"), "{message}");
+}
+
+#[tokio::test]
+async fn multi_source_samename_errors_when_both_active() {
+    let (_temp, root) = setup("multi-source-samename");
+    let err = generate::run(&options(&root, |_| {}))
+        .await
+        .expect_err("same name in both sources");
+    let message = err.to_string();
+    assert!(message.contains("template `app`"), "{message}");
+    assert!(message.contains("enabled in more than one"), "{message}");
+}
+
+#[tokio::test]
+async fn golden_multi_source_shadowed() {
+    // Per-source `exclude_templates` deactivates one copy: no conflict, and
+    // only the live source generates.
+    let (_temp, root) = setup("multi-source-shadowed");
+    generate::run(&options(&root, |_| {}))
+        .await
+        .expect("generate");
+    common::assert_tree_matches(
+        &root,
+        &source_case("multi-source-shadowed").join("expected"),
+    );
+}
+
+#[tokio::test]
+async fn golden_multi_source_abstract_scope() {
+    // Same abstract name with different bodies per source: each concrete
+    // template resolves against its own source only.
+    let (_temp, root) = setup("multi-source-abstract-scope");
+    generate::run(&options(&root, |_| {}))
+        .await
+        .expect("generate");
+    common::assert_tree_matches(
+        &root,
+        &source_case("multi-source-abstract-scope").join("expected"),
+    );
 }
 
 #[tokio::test]

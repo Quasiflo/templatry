@@ -1,0 +1,5 @@
+[source]
+path = "templates"
+
+[source.extra]
+path = "templates"

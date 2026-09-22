@@ -1,0 +1,4 @@
+[templates.beta-settings]
+template = "beta-settings.json"
+generated_file = "settings.json"
+labels = ["beta"]

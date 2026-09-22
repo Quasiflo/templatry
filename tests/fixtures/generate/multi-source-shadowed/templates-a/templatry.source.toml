@@ -1,0 +1,4 @@
+[templates.app]
+template = "app.json"
+generated_file = "a.json"
+labels = ["a"]

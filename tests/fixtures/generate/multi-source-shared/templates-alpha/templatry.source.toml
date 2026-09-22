@@ -1,0 +1,4 @@
+[templates.alpha-extensions]
+template = "alpha.json"
+generated_file = "extensions.json"
+labels = ["alpha"]

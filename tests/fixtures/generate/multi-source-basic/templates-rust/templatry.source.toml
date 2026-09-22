@@ -1,0 +1,4 @@
+[templates.rust-settings]
+template = "rust-settings.json"
+generated_file = "rust-settings.json"
+labels = ["rust"]

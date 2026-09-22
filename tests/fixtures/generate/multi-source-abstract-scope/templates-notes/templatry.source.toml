@@ -1,0 +1,11 @@
+[abstract.base]
+generated_dir = ""
+generated_file = "notes.txt"
+override_dir = ""
+override_file = "notes-override.txt"
+strategy = "append_bottom"
+
+[templates.notes-guide]
+template = "guide.txt"
+extends = "base"
+labels = ["notes"]

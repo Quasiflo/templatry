@@ -1,0 +1,11 @@
+[abstract.base]
+generated_dir = ""
+generated_file = "docs.txt"
+override_dir = ""
+override_file = "docs-override.txt"
+strategy = "append_bottom"
+
+[templates.docs-guide]
+template = "guide.txt"
+extends = "base"
+labels = ["docs"]

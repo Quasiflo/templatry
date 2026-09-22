@@ -1,0 +1,5 @@
+[source.a]
+path = "templates-a"
+
+[source.b]
+path = "templates-b"

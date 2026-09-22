@@ -61,7 +61,7 @@ templatry --watch               # alias for generate --watch
 
 ## Project Configuration
 
-`.config/templatry.toml` holds one singular `[source]` table (multi-source projects are future work). Exactly one source kind is set per project. All project-relative paths (`path`, override dirs, generated dirs) resolve against the repository root.
+`.config/templatry.toml` holds either one singular `[source]` table or one `[source.<name>]` table per template source (never both). Exactly one source kind is set per source. All project-relative paths (`path`, override dirs, generated dirs) resolve against the repository root.
 
 ```toml
 # Local directory: used in place, never cached.
@@ -98,6 +98,20 @@ disable_labels = ["legacy"] # force these off (wins ties)
 ```
 
 Unknown labels are an error. Individual templates can also be picked directly, on top of label selection: `include_templates` restricts generation to the listed templates (absent means no restriction, present-but-empty disables everything), while `exclude_templates` removes listed ones and wins all ties. Unknown template names are an error.
+
+### Multiple Sources
+
+```toml
+[source.rust]
+path = "templates-rust"
+disable_labels = ["legacy"] # scoped to this source's templates
+
+[source.shared]
+github = "myorg/team-configs"
+ref = "v1.2.3"
+```
+
+Each source resolves and fetches independently, runs abstract substitution (`extends`) and label/template filtering within its own scope, then merges into one template set. Abstracts never bleed across sources: two sources may define the same `[abstract.*]` name with different bodies. Array unions and text concatenations spanning sources order parts by `(source, template)` name. A template name enabled in two sources is an error; defined in several but enabled in one passes with a `validate` warning naming the ignored copies. Same-destination rules apply across sources with templates named `source:template` in diagnostics, and a shared destination spanning sources with `back_propagate` set is an error (the fold target would be ambiguous).
 
 ## Source Configuration
 

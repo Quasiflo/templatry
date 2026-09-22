@@ -1,0 +1,3 @@
+[templates.a]
+template = "a.json"
+generated_file = "a.json"

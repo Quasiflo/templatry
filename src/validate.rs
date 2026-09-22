@@ -9,7 +9,7 @@
 
 use std::path::Path;
 
-use crate::config::{self, PROJECT_CONFIG_PATH, ProjectConfig, SOURCE_CONFIG_FILENAME, SourceFile};
+use crate::config::{PROJECT_CONFIG_PATH, ProjectConfig, SOURCE_CONFIG_FILENAME, SourceFile};
 
 /// Validate the configuration in scope, auto-detecting source vs project context.
 pub async fn run(config: Option<&Path>) -> crate::Result<()> {
@@ -61,21 +61,20 @@ fn validate_source_file(path: &Path) -> crate::Result<()> {
     source.validate(source_dir, path)
 }
 
-/// Parse a project file, resolve its source, then validate the source config.
+/// Parse a project file, resolve its sources, then validate every source config
+/// plus the merged template set.
 ///
 /// Remote sources are fetched through the cache first (see [`crate::source`]).
+/// Same-name templates enabled in several sources fail; names defined in
+/// several sources but enabled in one print a warning and pass.
 async fn validate_project_file(path: &Path) -> crate::Result<()> {
     let content = crate::read_file(path)?;
     let project: ProjectConfig = crate::parse_toml(path, &content)?;
     let project_root = crate::config::project_root(path);
-    let resolved = crate::source::resolve(&project.source, &project_root, false).await?;
-    let source_file = resolved.root_dir.join(SOURCE_CONFIG_FILENAME);
-    let content = crate::read_file(&source_file)?;
-    let source: SourceFile = crate::parse_toml(&source_file, &content)?;
-    source.validate(&resolved.root_dir, &source_file)?;
-    let resolved = source.resolved_templates(&source_file)?;
-    // Resolving also rejects unknown project labels and template names
-    // against the source label and template sets.
-    config::resolve_enabled_templates(&resolved, &source.default, &project.source)?;
+    let loaded =
+        crate::generate::load_project_sources(&project, path, &project_root, false).await?;
+    for warning in &loaded.warnings {
+        eprintln!("warning: {warning}");
+    }
     Ok(())
 }

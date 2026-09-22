@@ -1,0 +1,5 @@
+[source.docs]
+path = "templates-docs"
+
+[source.notes]
+path = "templates-notes"

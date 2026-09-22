@@ -32,12 +32,145 @@ pub fn project_root(config_path: &Path) -> PathBuf {
 
 // ---- Project config (`templatry.toml`) -------------------------------------
 
-/// Project configuration: a singular `[source]` table (multi-source is future work).
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
+/// Project configuration: one `[source]` table or one `[source.<name>]` table
+/// per template source (never both).
+#[derive(Debug, Clone)]
 pub struct ProjectConfig {
-    /// Template source reference plus label layering.
-    pub source: SourceRef,
+    /// Singular source reference (`[source]`), if the project uses one source.
+    pub source: Option<SourceRef>,
+    /// Named source references (`[source.<name>]`), empty for singular projects.
+    pub sources: BTreeMap<String, SourceRef>,
+}
+
+impl<'de> serde::Deserialize<'de> for ProjectConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct RawProject {
+            #[serde(default)]
+            source: Option<toml::Value>,
+        }
+
+        let raw = RawProject::deserialize(deserializer)?;
+        let Some(table) = raw.source else {
+            return Err(serde::de::Error::missing_field(
+                "project defines no `[source]`: add `[source]` (one source) or `[source.<name>]` (one table per source)",
+            ));
+        };
+        let toml::Value::Table(map) = table else {
+            return Err(serde::de::Error::custom(
+                "`[source]` must be a table: set `[source]` fields or `[source.<name>]` tables",
+            ));
+        };
+        split_project_sources(map).map_err(serde::de::Error::custom)
+    }
+}
+
+/// Split a raw `[source]` table into singular vs plural form.
+///
+/// A `path`/`github`/`url`/`git` key holding a string means the singular
+/// `[source]` table (a source literally named e.g. `path` would hold a table
+/// there instead). Anything else is one `[source.<name>]` table per entry.
+fn split_project_sources(
+    map: toml::map::Map<String, toml::Value>,
+) -> Result<ProjectConfig, String> {
+    const KIND_KEYS: [&str; 4] = ["path", "github", "url", "git"];
+    const FIELD_NAMES: [&str; 12] = [
+        "path",
+        "github",
+        "url",
+        "git",
+        "ref",
+        "root",
+        "asset",
+        "use_https",
+        "enable_labels",
+        "disable_labels",
+        "include_templates",
+        "exclude_templates",
+    ];
+
+    let singular = KIND_KEYS.iter().any(|key| {
+        map.get(*key)
+            .is_some_and(|value| value.as_str().is_some_and(|text| !text.is_empty()))
+    });
+    if singular {
+        for (key, value) in &map {
+            if !FIELD_NAMES.contains(&key.as_str()) {
+                if value.is_table() {
+                    return Err(format!(
+                        "project mixes `[source]` fields with `[source.{key}]` tables: use either the singular `[source]` table or one table per source (`[source.<name>]`), not both"
+                    ));
+                }
+                return Err(format!(
+                    "unknown field `source.{key}`: expected one of {}",
+                    FIELD_NAMES.join(", ")
+                ));
+            }
+        }
+        let source: SourceRef =
+            toml::Value::Table(map)
+                .try_into()
+                .map_err(|err: toml::de::Error| {
+                    format!("invalid `[source]` table: {}", err.message())
+                })?;
+        return Ok(ProjectConfig {
+            source: Some(source),
+            sources: BTreeMap::new(),
+        });
+    }
+
+    if map.is_empty() {
+        return Err(
+            "project defines an empty `[source]` table: add `[source]` fields or `[source.<name>]` tables"
+                .to_string(),
+        );
+    }
+    let mut sources = BTreeMap::new();
+    for (name, value) in map {
+        if name.trim().is_empty() {
+            return Err("source name must not be empty: rename `[source.<name>]`".to_string());
+        }
+        if !value.is_table() {
+            return Err(format!(
+                "`[source]` entry `{name}` must be a table (`[source.{name}]` with `path`, `github`, `url`, or `git`): fix the typo or move singular fields under `[source]`"
+            ));
+        }
+        let source: SourceRef = value.try_into().map_err(|err: toml::de::Error| {
+            format!("invalid `[source.{name}]` table: {}", err.message())
+        })?;
+        sources.insert(name, source);
+    }
+    Ok(ProjectConfig {
+        source: None,
+        sources,
+    })
+}
+
+impl ProjectConfig {
+    /// Configured sources in resolution order: the singular `[source]` first
+    /// (with an empty name), else every `[source.<name>]` alphabetically.
+    ///
+    /// The empty singular name keeps single-source diagnostics and template
+    /// names unqualified; every plural name qualifies its templates as
+    /// `source:template`.
+    pub fn project_sources(&self) -> Vec<(String, &SourceRef)> {
+        if let Some(source) = self.source.as_ref() {
+            return vec![(String::new(), source)];
+        }
+        self.sources
+            .iter()
+            .map(|(name, source)| (name.clone(), source))
+            .collect()
+    }
+
+    /// True when the project uses the plural `[source.<name>]` form.
+    pub fn is_multi_source(&self) -> bool {
+        self.source.is_none()
+    }
 }
 
 /// Reference to a single template source (v1: exactly one kind key is set).
@@ -669,63 +802,16 @@ impl SourceFile {
         configs: &Configs,
         display_path: &Path,
     ) -> crate::Result<()> {
-        let mut groups: BTreeMap<(String, String), Vec<&str>> = BTreeMap::new();
-        for (name, template) in templates {
-            let key = (
-                template.resolved_generated_dir(configs),
-                template.resolved_generated_file()?,
-            );
-            groups.entry(key).or_default().push(name.as_str());
-        }
-        for ((dir, file), names) in &groups {
-            if names.len() < 2 {
-                continue;
-            }
-            if names
-                .iter()
-                .any(|name| templates[*name].strategy == Some(Strategy::Replace))
-            {
-                return Err(crate::invalid(
-                    display_path,
-                    format!(
-                        "templates {} all target `{dir}/{file}`, but `replace` emits one override verbatim and cannot combine: give them distinct destinations or drop `replace`",
-                        names.join("`, `")
-                    ),
-                ));
-            }
-            let mut families = BTreeSet::new();
-            let mut back_propagated = Vec::new();
-            for name in names {
-                let template = &templates[*name];
-                families.insert(crate::merge::family_of(
-                    template,
-                    &template.resolved_generated_file()?,
-                )?);
-                if template.back_propagate == Some(true) {
-                    back_propagated.push(*name);
-                }
-            }
-            if families.len() > 1 {
-                return Err(crate::invalid(
-                    display_path,
-                    format!(
-                        "templates {} all target `{dir}/{file}`, but mix structured merges with text strategies: align them to one family",
-                        names.join("`, `")
-                    ),
-                ));
-            }
-            if !back_propagated.is_empty() && families.contains(&crate::merge::Family::Text) {
-                return Err(crate::invalid(
-                    display_path,
-                    format!(
-                        "templates {} all target `{dir}/{file}`, but back propagation into a shared text destination cannot attribute edits to one override ({}): use structured merge strategies for label-split files",
-                        names.join("`, `"),
-                        back_propagated.join("`, `")
-                    ),
-                ));
-            }
-        }
-        Ok(())
+        let members: Vec<DestMember<'_>> = templates
+            .iter()
+            .map(|(name, template)| DestMember {
+                display: name.clone(),
+                template,
+                configs,
+                source: "",
+            })
+            .collect();
+        check_shared_groups(&members, display_path, false)
     }
 
     /// `[default]` label lists must reference labels some template defines.
@@ -959,6 +1045,222 @@ fn unknown_template(name: &str, templates: &BTreeMap<String, Template>) -> crate
     )
 }
 
+// ---- Multi-source merge -----------------------------------------------------
+
+/// One source's contribution to the merged template set (borrowed view).
+///
+/// `templates` must already be `extends`-resolved within the source, so
+/// abstract substitutions never bleed across sources. Views must arrive in
+/// deterministic source-name order ([`ProjectConfig::project_sources`]).
+pub struct SourceView<'a> {
+    /// Source name (`""` for singular `[source]` projects).
+    pub name: &'a str,
+    /// `extends`-resolved templates (all, not just enabled).
+    pub templates: &'a BTreeMap<String, Template>,
+    /// Enabled template names after this source's own label filtering.
+    pub enabled: &'a BTreeSet<String>,
+    /// This source's `[configs]` defaults for destination resolution.
+    pub configs: &'a Configs,
+}
+
+/// One active template with its owning source, in (source, template) order.
+#[derive(Debug, Clone)]
+pub struct ActiveTemplate {
+    /// Owning source name (`""` for singular projects).
+    pub source: String,
+    /// Template name within its source.
+    pub name: String,
+    /// `extends`-resolved template definition.
+    pub template: Template,
+    /// Owning source's `[configs]` defaults.
+    pub configs: Configs,
+}
+
+/// Merge per-source active templates into one ordered set.
+///
+/// A template name enabled in two sources is an error (the outputs would
+/// collide with no owner). A name defined in several sources but enabled in
+/// exactly one is returned as a warning: the other copies are ignored.
+/// Names disabled everywhere stay silent.
+pub fn merge_active_templates(
+    views: &[SourceView<'_>],
+) -> crate::Result<(Vec<ActiveTemplate>, Vec<String>)> {
+    let mut defined: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    let mut active: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+    for (index, view) in views.iter().enumerate() {
+        for name in view.templates.keys() {
+            defined.entry(name.as_str()).or_default().push(view.name);
+        }
+        for name in view.enabled {
+            active.entry(name.as_str()).or_default().push(index);
+        }
+    }
+    for (name, holders) in &active {
+        if holders.len() > 1 {
+            let sources: Vec<String> = holders
+                .iter()
+                .map(|&index| format!("`{}`", views[index].name))
+                .collect();
+            return Err(crate::invalid(
+                Path::new("templatry.toml"),
+                format!(
+                    "template `{name}` is defined by sources {} and enabled in more than one: rename one template or disable one side (`disable_labels` or `exclude_templates`)",
+                    sources.join(", ")
+                ),
+            ));
+        }
+    }
+    let mut warnings = Vec::new();
+    for (name, holders) in &defined {
+        if holders.len() > 1 && active.get(*name).is_some_and(|live| live.len() == 1) {
+            let live = views[active[*name][0]].name;
+            let all: Vec<String> = holders.iter().map(|source| format!("`{source}`")).collect();
+            warnings.push(format!(
+                "template `{name}` is defined by sources {} but only enabled in `{live}`: the other copies are ignored (rename to silence this warning)",
+                all.join(", ")
+            ));
+        }
+    }
+    let mut merged = Vec::new();
+    for view in views {
+        for name in view.enabled {
+            merged.push(ActiveTemplate {
+                source: view.name.to_string(),
+                name: name.clone(),
+                template: view.templates[name].clone(),
+                configs: view.configs.clone(),
+            });
+        }
+    }
+    Ok((merged, warnings))
+}
+
+/// Validate merged active templates for destination conflicts.
+///
+/// Same rules as the single-source shared-destination check (no `replace` in
+/// a group, one strategy family per destination), plus: a shared destination
+/// spanning sources with `back_propagate` set is an error, since the fold
+/// target would be ambiguous. Template names render `source:template`
+/// whenever the owning source is named.
+pub fn validate_merged_destinations(
+    members: &[ActiveTemplate],
+    display_path: &Path,
+) -> crate::Result<()> {
+    let borrowed: Vec<DestMember<'_>> = members
+        .iter()
+        .map(|member| DestMember {
+            display: qualified_name(&member.source, &member.name),
+            template: &member.template,
+            configs: &member.configs,
+            source: member.source.as_str(),
+        })
+        .collect();
+    check_shared_groups(&borrowed, display_path, true)
+}
+
+/// Display name for a template: bare for singular projects, `source:template`
+/// once sources are named.
+pub fn qualified_name(source: &str, template: &str) -> String {
+    if source.is_empty() {
+        template.to_string()
+    } else {
+        format!("{source}:{template}")
+    }
+}
+
+/// One destination-group candidate for the shared-destination check.
+struct DestMember<'a> {
+    /// Display name (bare or `source:template`).
+    display: String,
+    template: &'a Template,
+    configs: &'a Configs,
+    source: &'a str,
+}
+
+/// Shared-destination rules over pre-grouped candidates.
+///
+/// With `cross_source_backprop`, groups spanning sources with
+/// `back_propagate` set fail even for structured strategies; otherwise only
+/// the text-family attribution rule applies.
+fn check_shared_groups(
+    members: &[DestMember<'_>],
+    display_path: &Path,
+    cross_source_backprop: bool,
+) -> crate::Result<()> {
+    let mut groups: BTreeMap<(String, String), Vec<&DestMember<'_>>> = BTreeMap::new();
+    for member in members {
+        let key = (
+            member.template.resolved_generated_dir(member.configs),
+            member.template.resolved_generated_file()?,
+        );
+        groups.entry(key).or_default().push(member);
+    }
+    for ((dir, file), group) in &groups {
+        if group.len() < 2 {
+            continue;
+        }
+        let names: Vec<&str> = group.iter().map(|member| member.display.as_str()).collect();
+        if group
+            .iter()
+            .any(|member| member.template.strategy == Some(Strategy::Replace))
+        {
+            return Err(crate::invalid(
+                display_path,
+                format!(
+                    "templates {} all target `{dir}/{file}`, but `replace` emits one override verbatim and cannot combine: give them distinct destinations or drop `replace`",
+                    names.join("`, `")
+                ),
+            ));
+        }
+        let mut families = BTreeSet::new();
+        let mut back_propagated = Vec::new();
+        let mut sources = BTreeSet::new();
+        for member in group {
+            families.insert(crate::merge::family_of(
+                member.template,
+                &member.template.resolved_generated_file()?,
+            )?);
+            if member.template.back_propagate == Some(true) {
+                back_propagated.push(member.display.as_str());
+            }
+            sources.insert(member.source);
+        }
+        if families.len() > 1 {
+            return Err(crate::invalid(
+                display_path,
+                format!(
+                    "templates {} all target `{dir}/{file}`, but mix structured merges with text strategies: align them to one family",
+                    names.join("`, `")
+                ),
+            ));
+        }
+        if cross_source_backprop && sources.len() > 1 && !back_propagated.is_empty() {
+            let spanning: Vec<String> =
+                sources.iter().map(|source| format!("`{source}`")).collect();
+            return Err(crate::invalid(
+                display_path,
+                format!(
+                    "templates {} all target `{dir}/{file}`, but back propagation into a shared destination spanning sources ({}) cannot attribute edits to one override ({}): keep back-propagated destinations within one source",
+                    names.join("`, `"),
+                    spanning.join(", "),
+                    back_propagated.join("`, `")
+                ),
+            ));
+        }
+        if !back_propagated.is_empty() && families.contains(&crate::merge::Family::Text) {
+            return Err(crate::invalid(
+                display_path,
+                format!(
+                    "templates {} all target `{dir}/{file}`, but back propagation into a shared text destination cannot attribute edits to one override ({}): use structured merge strategies for label-split files",
+                    names.join("`, `"),
+                    back_propagated.join("`, `")
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -974,7 +1276,9 @@ mod tests {
     }
 
     fn project_ref(body: &str) -> SourceRef {
-        parse_project(&format!("[source]\n{body}")).source
+        parse_project(&format!("[source]\n{body}"))
+            .source
+            .expect("singular test project")
     }
 
     fn empty_project() -> SourceRef {
@@ -1522,7 +1826,7 @@ exclude_labels = ["dart"]
     #[test]
     fn kind_count_and_use_https_rules() {
         let err = ProjectConfig {
-            source: SourceRef {
+            source: Some(SourceRef {
                 path: None,
                 github: None,
                 url: None,
@@ -1535,9 +1839,11 @@ exclude_labels = ["dart"]
                 disable_labels: vec![],
                 include_templates: None,
                 exclude_templates: vec![],
-            },
+            }),
+            sources: BTreeMap::new(),
         }
         .source
+        .expect("singular")
         .kind()
         .unwrap_err();
         assert!(err.to_string().contains("no source kind"), "{err:?}");
@@ -1560,5 +1866,232 @@ exclude_labels = ["dart"]
         validate_git_transport(&https).expect_err("https flag with ssh url");
         let ssh = project_ref("git = \"git@github.com:o/r.git\"\nref = \"v1\"\n");
         validate_git_transport(&ssh).expect("ssh default");
+    }
+
+    #[test]
+    fn singular_source_stays_singular() {
+        let project = parse_project("[source]\npath = \"templates\"\n");
+        assert!(!project.is_multi_source());
+        let sources = project.project_sources();
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].0, "");
+        assert_eq!(sources[0].1.path.as_deref(), Some("templates"));
+    }
+
+    #[test]
+    fn plural_sources_parse_named() {
+        let project = parse_project(
+            "[source.b]\npath = \"tb\"\n[source.a]\npath = \"ta\"\ninclude_templates = [\"x\"]\n",
+        );
+        assert!(project.is_multi_source());
+        assert!(project.source.is_none());
+        let sources = project.project_sources();
+        let names: Vec<&str> = sources.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(names, ["a", "b"]);
+        assert_eq!(sources[0].1.path.as_deref(), Some("ta"));
+        assert_eq!(sources[0].1.include_templates, Some(vec!["x".to_string()]));
+    }
+
+    #[test]
+    fn mixed_source_forms_rejected() {
+        let err = toml::from_str::<ProjectConfig>(
+            "[source]\npath = \"templates\"\n[source.extra]\npath = \"templates\"\n",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("mixes"), "{err:?}");
+    }
+
+    #[test]
+    fn empty_and_scalar_source_entries_rejected() {
+        let err = toml::from_str::<ProjectConfig>("[source]\n").unwrap_err();
+        assert!(err.to_string().contains("empty"), "{err:?}");
+
+        let err =
+            toml::from_str::<ProjectConfig>("[source]\nenable_labels = [\"x\"]\n").unwrap_err();
+        assert!(err.to_string().contains("must be a table"), "{err:?}");
+
+        let err = toml::from_str::<ProjectConfig>("").unwrap_err();
+        assert!(err.to_string().contains("[source]"), "{err:?}");
+    }
+
+    /// Minimal template targeting `generated` under `out/` (no disk access).
+    fn merged_template(generated: &str, backprop: bool) -> Template {
+        Template {
+            template: Some("t.json".to_string()),
+            extends: None,
+            override_file: None,
+            override_dir: None,
+            local_override_file: None,
+            generated_file: Some(generated.to_string()),
+            generated_dir: Some("out".to_string()),
+            strategy: None,
+            array_policy: None,
+            back_propagate: if backprop { Some(true) } else { None },
+            backprop_ignore: Vec::new(),
+            backprop_ignore_values: Vec::new(),
+            labels: BTreeSet::new(),
+        }
+    }
+
+    fn test_view(
+        templates: &[&str],
+        enabled: &[&str],
+    ) -> (BTreeMap<String, Template>, BTreeSet<String>, Configs) {
+        let map: BTreeMap<String, Template> = templates
+            .iter()
+            .map(|template| ((*template).to_string(), merged_template("out.json", false)))
+            .collect();
+        let set: BTreeSet<String> = enabled.iter().map(|name| (*name).to_string()).collect();
+        (map, set, Configs::default())
+    }
+
+    #[test]
+    fn merge_active_orders_by_source_then_template() {
+        let (a_map, a_on, a_configs) = test_view(&["z", "m"], &["z", "m"]);
+        let (b_map, b_on, b_configs) = test_view(&["a"], &["a"]);
+        let views = [
+            SourceView {
+                name: "a",
+                templates: &a_map,
+                enabled: &a_on,
+                configs: &a_configs,
+            },
+            SourceView {
+                name: "b",
+                templates: &b_map,
+                enabled: &b_on,
+                configs: &b_configs,
+            },
+        ];
+        let (merged, warnings) = merge_active_templates(&views).expect("merge");
+        let order: Vec<(&str, &str)> = merged
+            .iter()
+            .map(|member| (member.source.as_str(), member.name.as_str()))
+            .collect();
+        assert_eq!(order, [("a", "m"), ("a", "z"), ("b", "a")]);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn merge_active_conflict_errors_when_both_enabled() {
+        let (a_map, a_on, a_configs) = test_view(&["app"], &["app"]);
+        let (b_map, b_on, b_configs) = test_view(&["app"], &["app"]);
+        let views = [
+            SourceView {
+                name: "a",
+                templates: &a_map,
+                enabled: &a_on,
+                configs: &a_configs,
+            },
+            SourceView {
+                name: "b",
+                templates: &b_map,
+                enabled: &b_on,
+                configs: &b_configs,
+            },
+        ];
+        let err = merge_active_templates(&views).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("template `app`"), "{message}");
+        assert!(message.contains("more than one"), "{message}");
+    }
+
+    #[test]
+    fn merge_active_shadow_warns_when_one_enabled() {
+        let (a_map, a_on, a_configs) = test_view(&["app"], &[]);
+        let (b_map, b_on, b_configs) = test_view(&["app"], &["app"]);
+        let views = [
+            SourceView {
+                name: "a",
+                templates: &a_map,
+                enabled: &a_on,
+                configs: &a_configs,
+            },
+            SourceView {
+                name: "b",
+                templates: &b_map,
+                enabled: &b_on,
+                configs: &b_configs,
+            },
+        ];
+        let (merged, warnings) = merge_active_templates(&views).expect("shadow passes");
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].source, "b");
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("template `app`"), "{}", warnings[0]);
+        assert!(warnings[0].contains("`b`"), "{}", warnings[0]);
+    }
+
+    #[test]
+    fn merge_active_silent_when_all_disabled() {
+        let (a_map, a_on, a_configs) = test_view(&["app"], &[]);
+        let (b_map, b_on, b_configs) = test_view(&["app"], &[]);
+        let views = [
+            SourceView {
+                name: "a",
+                templates: &a_map,
+                enabled: &a_on,
+                configs: &a_configs,
+            },
+            SourceView {
+                name: "b",
+                templates: &b_map,
+                enabled: &b_on,
+                configs: &b_configs,
+            },
+        ];
+        let (merged, warnings) = merge_active_templates(&views).expect("all off passes");
+        assert!(merged.is_empty());
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn merged_destinations_cross_backprop_rejected() {
+        let members = [
+            ActiveTemplate {
+                source: "a".to_string(),
+                name: "a".to_string(),
+                template: merged_template("shared.json", true),
+                configs: Configs::default(),
+            },
+            ActiveTemplate {
+                source: "b".to_string(),
+                name: "b".to_string(),
+                template: merged_template("shared.json", false),
+                configs: Configs::default(),
+            },
+        ];
+        let err = validate_merged_destinations(&members, Path::new(".config/templatry.toml"))
+            .unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("spanning sources"), "{message}");
+        assert!(message.contains("a:a"), "{message}");
+        assert!(message.contains("b:b"), "{message}");
+    }
+
+    #[test]
+    fn merged_destinations_compatible_union_passes() {
+        let members = [
+            ActiveTemplate {
+                source: "a".to_string(),
+                name: "a".to_string(),
+                template: merged_template("shared.json", false),
+                configs: Configs::default(),
+            },
+            ActiveTemplate {
+                source: "b".to_string(),
+                name: "b".to_string(),
+                template: merged_template("shared.json", false),
+                configs: Configs::default(),
+            },
+        ];
+        validate_merged_destinations(&members, Path::new(".config/templatry.toml"))
+            .expect("structured union across sources");
+    }
+
+    #[test]
+    fn qualified_name_bare_for_singular() {
+        assert_eq!(qualified_name("", "app"), "app");
+        assert_eq!(qualified_name("a", "app"), "a:app");
     }
 }

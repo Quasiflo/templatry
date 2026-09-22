@@ -1,0 +1,5 @@
+[source.alpha]
+path = "templates-alpha"
+
+[source.beta]
+path = "templates-beta"

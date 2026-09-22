@@ -1,0 +1,4 @@
+[templates.alpha-settings]
+template = "alpha-settings.json"
+generated_file = "settings.json"
+labels = ["alpha"]

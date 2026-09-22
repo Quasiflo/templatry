@@ -33,6 +33,10 @@ fn all_validate_fixtures_are_known() {
             "project-both-invalid-source",
             "project-both-present",
             "project-empty",
+            "project-mixed-forms",
+            "project-multi-backprop",
+            "project-multi-shadowed",
+            "project-multi-valid",
             "project-valid-local",
             "source-invalid",
             "source-valid",
@@ -87,4 +91,39 @@ async fn missing_configs_fails() {
         .await
         .expect_err("no config");
     assert!(err.to_string().contains("neither"), "{err:?}");
+}
+
+#[tokio::test]
+async fn mixed_source_forms_fail() {
+    let err = validate::run_in(&fixture("project-mixed-forms"), None)
+        .await
+        .expect_err("singular plus plural");
+    assert!(err.to_string().contains("mixes"), "{err:?}");
+}
+
+#[tokio::test]
+async fn multi_source_project_passes() {
+    validate::run_in(&fixture("project-multi-valid"), None)
+        .await
+        .expect("multi-source project validates");
+}
+
+#[tokio::test]
+async fn multi_source_cross_backprop_fails() {
+    let err = validate::run_in(&fixture("project-multi-backprop"), None)
+        .await
+        .expect_err("cross-source backprop");
+    let message = err.to_string();
+    assert!(message.contains("spanning sources"), "{message}");
+    assert!(message.contains("a:a"), "{message}");
+    assert!(message.contains("b:b"), "{message}");
+}
+
+#[tokio::test]
+async fn multi_source_shadowed_passes() {
+    // Same name defined twice but enabled once: valid (a warning goes to
+    // stderr, which this harness does not capture).
+    validate::run_in(&fixture("project-multi-shadowed"), None)
+        .await
+        .expect("shadowed duplicate validates");
 }

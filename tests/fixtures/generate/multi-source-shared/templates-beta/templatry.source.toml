@@ -1,0 +1,4 @@
+[templates.beta-extensions]
+template = "beta.json"
+generated_file = "extensions.json"
+labels = ["beta"]

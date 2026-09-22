@@ -22,7 +22,7 @@ use watchexec::Watchexec;
 use watchexec_signals::Signal;
 
 use crate::backprop::{self, BackpropOutcome, MemberView};
-use crate::config::{SOURCE_CONFIG_FILENAME, SourceKind, Template};
+use crate::config::{SOURCE_CONFIG_FILENAME, SourceKind};
 use crate::generate::{self, GroupMember, Options, ProjectContext};
 
 /// Self-trigger guard window: our own writes arriving inside it are ignored.
@@ -364,9 +364,9 @@ fn read_member_files(
     members
         .iter()
         .map(|member| {
-            let template_path = context.source_root.join(member.template.template_path()?);
+            let template_path = member.source_root.join(member.template.template_path()?);
             let template_text = crate::read_file(&template_path)?;
-            let override_path = override_path_for(context, &member.template)?;
+            let override_path = override_path_for(context, member)?;
             let override_text = read_layer(&override_path, "override file")?;
             let local_text = match member
                 .template
@@ -522,7 +522,7 @@ fn apply_backprop(
         ));
     };
     if let Some(text) = new_override_text {
-        let override_path = override_path_for(context, &winner.template)?;
+        let override_path = override_path_for(context, winner)?;
         generate::atomic_write(override_path.as_path(), text.as_bytes(), None)?;
         shared.guard.note_write(&override_path);
     }
@@ -534,12 +534,15 @@ fn apply_backprop(
     Ok(())
 }
 
-/// Absolute override path for one template.
-fn override_path_for(context: &ProjectContext, template: &Template) -> crate::Result<PathBuf> {
+/// Absolute override path for one group member (overrides live in the
+/// project, so the root is shared; the directory comes from the member's own
+/// source defaults).
+fn override_path_for(context: &ProjectContext, member: &GroupMember) -> crate::Result<PathBuf> {
+    let template = &member.template;
     Ok(absolute(
         &context
             .project_root
-            .join(template.resolved_override_dir(&context.source.configs))
+            .join(template.resolved_override_dir(&member.configs))
             .join(template.resolved_override_file().map_err(|err| {
                 crate::invalid(
                     &context.project_file,
@@ -561,8 +564,8 @@ struct Subscriptions {
     groups: HashMap<PathBuf, Vec<GroupMember>>,
     /// Project config file: change triggers a full reload.
     project_file: PathBuf,
-    /// Source file for local sources: change triggers a full reload.
-    source_file: Option<PathBuf>,
+    /// Source files for local sources: change triggers a full reload.
+    source_files: Vec<PathBuf>,
     /// Parent directories watched non-recursively.
     watch_dirs: Vec<PathBuf>,
 }
@@ -592,7 +595,7 @@ impl Subscriptions {
             }
             let mut watches_generated = false;
             for member in members {
-                let override_path = override_path_for(context, &member.template)?;
+                let override_path = override_path_for(context, member)?;
                 overrides
                     .entry(override_path.clone())
                     .or_default()
@@ -635,12 +638,15 @@ impl Subscriptions {
         if let Some(parent) = project_file.parent() {
             watch_dirs.insert(parent.to_path_buf());
         }
-        let source_file = (context.kind == SourceKind::LocalDir)
-            .then(|| absolute(&context.source_root.join(SOURCE_CONFIG_FILENAME)));
-        if let Some(source) = source_file.as_ref()
-            && let Some(parent) = source.parent()
-        {
-            watch_dirs.insert(parent.to_path_buf());
+        let mut source_files = Vec::new();
+        for entry in &context.entries {
+            if entry.kind == SourceKind::LocalDir {
+                let source = absolute(&entry.root_dir.join(SOURCE_CONFIG_FILENAME));
+                if let Some(parent) = source.parent() {
+                    watch_dirs.insert(parent.to_path_buf());
+                }
+                source_files.push(source);
+            }
         }
 
         Ok(Self {
@@ -648,7 +654,7 @@ impl Subscriptions {
             generated,
             groups: groups_map,
             project_file,
-            source_file,
+            source_files,
             watch_dirs: watch_dirs.into_iter().collect(),
         })
     }
@@ -665,13 +671,15 @@ impl Subscriptions {
 /// Override directories in use by enabled templates (absolute).
 fn override_dirs(context: &ProjectContext) -> crate::Result<Vec<PathBuf>> {
     let mut dirs = HashSet::new();
-    for name in &context.enabled {
-        let template = &context.source.templates[name];
-        dirs.insert(absolute(
-            &context
-                .project_root
-                .join(template.resolved_override_dir(&context.source.configs)),
-        ));
+    for entry in &context.entries {
+        for name in &entry.enabled {
+            let template = &entry.resolved[name];
+            dirs.insert(absolute(
+                &context
+                    .project_root
+                    .join(template.resolved_override_dir(&entry.source.configs)),
+            ));
+        }
     }
     Ok(dirs.into_iter().collect())
 }
@@ -732,9 +740,9 @@ fn classify(
     for path in paths {
         if same_file(path, &subscriptions.project_file)
             || subscriptions
-                .source_file
-                .as_ref()
-                .is_some_and(|source| same_file(path, source))
+                .source_files
+                .iter()
+                .any(|source| same_file(path, source))
         {
             return Dispatch::Reload;
         }
@@ -818,7 +826,7 @@ mod tests {
             generated: [(generated.clone(), generated)].into_iter().collect(),
             groups: HashMap::new(),
             project_file: dir.join(".config").join("templatry.toml"),
-            source_file: Some(dir.join("templates").join("templatry.source.toml")),
+            source_files: vec![dir.join("templates").join("templatry.source.toml")],
             watch_dirs: Vec::new(),
         }
     }
@@ -954,15 +962,19 @@ mod tests {
         let context = ProjectContext {
             project_file: dir.join(".config").join("templatry.toml"),
             project_root: dir.to_path_buf(),
-            source_root: templates,
-            source: SourceFile {
-                configs: Configs::default(),
-                abstracts: Default::default(),
-                templates: templates_map,
-                default: None,
-            },
-            enabled: vec!["app".to_string()],
-            kind: SourceKind::LocalDir,
+            entries: vec![crate::generate::ContextEntry {
+                name: String::new(),
+                root_dir: templates.clone(),
+                source: SourceFile {
+                    configs: Configs::default(),
+                    abstracts: Default::default(),
+                    templates: templates_map.clone(),
+                    default: None,
+                },
+                resolved: templates_map,
+                enabled: ["app".to_string()].into_iter().collect(),
+                kind: SourceKind::LocalDir,
+            }],
         };
         let groups = generate::group_members(&context).expect("groups");
         (context, groups)
@@ -1002,7 +1014,7 @@ mod tests {
         let captured = b"{\n  \"k\": 2,\n  \"u\": \"old\"\n}\n".to_vec();
         // Template bumped underneath the pending edit.
         std::fs::write(
-            context.source_root.join("app.json"),
+            context.entries[0].root_dir.join("app.json"),
             "{\"k\": 1, \"u\": \"new\", \"n\": true}",
         )
         .expect("bump template");
