@@ -239,11 +239,12 @@ fn regenerate(
         let Some(members) = subscriptions.groups.get(dest) else {
             continue;
         };
-        let content = generate::render_group(dest, members, context)?;
-        let content = generate::preserve_group(dest, &content, members)?;
+        let group = generate::render_group(dest, members, context)?;
+        let content = generate::preserve_group(dest, &group.content, members)?;
         generate::write_plan(&[crate::generate::PlannedWrite {
             dest: dest.clone(),
             content: content.clone(),
+            mode: group.mode,
         }])?;
         shared.guard.note_write(dest);
         lock_tracker(&shared.tracker)
@@ -522,10 +523,10 @@ fn apply_backprop(
     };
     if let Some(text) = new_override_text {
         let override_path = override_path_for(context, &winner.template)?;
-        generate::atomic_write(override_path.as_path(), text.as_bytes())?;
+        generate::atomic_write(override_path.as_path(), text.as_bytes(), None)?;
         shared.guard.note_write(&override_path);
     }
-    generate::atomic_write(dest, replay_bytes)?;
+    generate::atomic_write(dest, replay_bytes, None)?;
     shared.guard.note_write(dest);
     lock_tracker(&shared.tracker)
         .entries

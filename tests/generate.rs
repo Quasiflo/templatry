@@ -48,6 +48,7 @@ fn all_generate_fixtures_are_known() {
             "labels",
             "local-chain",
             "merge-formats",
+            "none-copy",
             "preserve-ignore",
             "replace-missing",
             "shared-arrays",
@@ -205,4 +206,39 @@ async fn golden_merge_formats() {
         .await
         .expect("generate");
     common::assert_tree_matches(&root, &source_case("merge-formats").join("expected"));
+}
+
+#[tokio::test]
+async fn none_strategy_copies_bytes_and_permissions() {
+    // Strategy `none` is a straight copy: identical bytes plus the
+    // template's permission bits, so shipped scripts stay executable.
+    let (_temp, root) = setup("none-copy");
+    generate::run(&options(&root, |_| {}))
+        .await
+        .expect("generate");
+    common::assert_tree_matches(&root, &source_case("none-copy").join("expected"));
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let bits = |path: PathBuf| {
+            std::fs::metadata(&path)
+                .unwrap_or_else(|_| panic!("stat {}", path.display()))
+                .permissions()
+                .mode()
+                & 0o777
+        };
+        let template = root.join("templates").join("deploy.sh");
+        let generated = root.join(".config").join("generated").join("deploy.sh");
+        assert_eq!(
+            bits(generated.clone()),
+            bits(template),
+            "permissions mirrored from the template"
+        );
+        assert_eq!(
+            bits(generated) & 0o111,
+            0o111,
+            "copied script stays executable"
+        );
+    }
 }

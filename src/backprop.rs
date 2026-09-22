@@ -1010,7 +1010,7 @@ fn safety_replay(
                 labels: member.labels,
                 value,
             }),
-            merge::Rendered::Text(_) => {
+            merge::Rendered::Text(_) | merge::Rendered::Bytes(_) => {
                 return Err("mixed text output in structured replay".to_string());
             }
         }

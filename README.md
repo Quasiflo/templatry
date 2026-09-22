@@ -156,7 +156,7 @@ Omitted `strategy` auto-detects on the generated filename: `json`, `jsonc`, `yam
 | `append_top`    | Precedence-ordered segments: local, override, template (missing layers skipped) |
 | `append_bottom` | Precedence-ordered segments: template, override, local (missing layers skipped) |
 | `replace`       | Override file verbatim (missing override is an error; local warns and is ignored) |
-| `none`          | Template file verbatim, ignoring any override (for licenses etc) |
+| `none`          | Straight template copy: raw bytes plus its permission bits (Unix), ignoring any override (for scripts, licenses etc) |
 
 Structured merge recurses through objects with the override winning; scalars and type mismatches replace. A `local_override_file` (just a filename, resolved in the template's `override_dir`) adds a third layer on top for machine-local tweaks that are usually gitignored: it wins over the shared override, is skipped silently when missing, and is never written by back-propagation (which folds into the main override only). Arrays follow `array_policy`: `union` appends override items (scalars deduped, objects always appended, as in `smartworkspace`) while `replace` takes the override array wholesale. Setting a key to `_TEMPLATRY_DELETE_` in the override deletes it (value position only; document-root and in-array uses are errors). A missing or empty override file means the template passes through (except `replace`, which errors).
 

@@ -55,7 +55,8 @@ pub enum EffectiveStrategy {
     AppendBottom,
     /// Emit the override file verbatim.
     Replace,
-    /// Copy the template file verbatim, ignoring any override.
+    /// Straight copy of the template file: raw bytes plus (on Unix) its
+    /// permission bits, ignoring any override.
     None,
 }
 
@@ -394,8 +395,12 @@ pub struct Contribution<'a> {
 pub enum Rendered {
     /// Merged structured output plus its serialization format.
     Structured { value: Value, format: DocFormat },
-    /// Complete text output (append/replace/copied bytes).
+    /// Complete text output (append/replace merges).
     Text(String),
+    /// Raw template bytes for strategy `none`: a straight copy with no
+    /// decoding, so non-UTF-8 files survive. Combines only with
+    /// byte-identical copies (or UTF-8 text, decoded at combine time).
+    Bytes(Vec<u8>),
 }
 
 /// One grouped render plus its provenance.
@@ -413,6 +418,7 @@ pub struct GroupPart<'a> {
 /// Structured groups fold additively: disjoint keys union, equal values pass,
 /// and any conflicting leaf fails naming the path, template, and labels.
 /// Text groups concatenate in template-name order with newline separators.
+/// Raw-byte copies (`none`) combine only with byte-identical copies.
 pub fn combine_group(dest: &Path, parts: &[GroupPart<'_>]) -> crate::Result<Vec<u8>> {
     let Some(first) = parts.first() else {
         return Err(crate::invalid(
@@ -454,6 +460,15 @@ pub fn combine_group(dest: &Path, parts: &[GroupPart<'_>]) -> crate::Result<Vec<
                             ),
                         ));
                     }
+                    Rendered::Bytes(_) => {
+                        return Err(crate::invalid(
+                            dest,
+                            format!(
+                                "template `{}` copies raw bytes while its destination group merges structured output: mixed families cannot combine",
+                                part.template
+                            ),
+                        ));
+                    }
                 }
             }
             serialize_doc(&combine_structured(&contributions)?, format).map(String::into_bytes)
@@ -463,6 +478,18 @@ pub fn combine_group(dest: &Path, parts: &[GroupPart<'_>]) -> crate::Result<Vec<
             for part in parts {
                 match part.rendered {
                     Rendered::Text(text) => texts.push((part.template, text.as_str())),
+                    Rendered::Bytes(bytes) => {
+                        let text = std::str::from_utf8(bytes).map_err(|err| {
+                            crate::invalid(
+                                dest,
+                                format!(
+                                    "template `{}` copies raw bytes that are not valid UTF-8, which cannot combine with text output: {err}",
+                                    part.template
+                                ),
+                            )
+                        })?;
+                        texts.push((part.template, text));
+                    }
                     Rendered::Structured { .. } => {
                         return Err(crate::invalid(
                             dest,
@@ -475,6 +502,34 @@ pub fn combine_group(dest: &Path, parts: &[GroupPart<'_>]) -> crate::Result<Vec<
                 }
             }
             Ok(combine_text(&texts).into_bytes())
+        }
+        Rendered::Bytes(first_bytes) => {
+            for part in &parts[1..] {
+                match part.rendered {
+                    Rendered::Bytes(bytes) if bytes == first_bytes => {}
+                    Rendered::Bytes(_) => {
+                        return Err(crate::invalid(
+                            dest,
+                            format!(
+                                "templates `{}` and `{}` all target `{}`, but strategy `none` copies each template verbatim and the files differ: give them distinct destinations",
+                                first.template,
+                                part.template,
+                                dest.display()
+                            ),
+                        ));
+                    }
+                    _ => {
+                        return Err(crate::invalid(
+                            dest,
+                            format!(
+                                "template `{}` renders text while its destination group copies raw bytes: mixed families cannot combine",
+                                part.template
+                            ),
+                        ));
+                    }
+                }
+            }
+            Ok(first_bytes.clone())
         }
     }
 }
@@ -956,6 +1011,89 @@ mod tests {
             },
         ];
         assert!(combine_group(dest, &mixed).is_err());
+    }
+
+    #[test]
+    fn raw_copies_combine_only_when_identical() {
+        let labels: BTreeSet<String> = BTreeSet::new();
+        let script = Rendered::Bytes(b"#!/bin/sh\necho hi\n".to_vec());
+        let other = Rendered::Bytes(b"#!/bin/sh\necho bye\n".to_vec());
+        let text = Rendered::Text("hello".to_string());
+        let dest = Path::new("deploy.sh");
+
+        // A lone copy passes its bytes through untouched.
+        let parts = [GroupPart {
+            template: "a",
+            labels: &labels,
+            rendered: &script,
+        }];
+        assert_eq!(
+            combine_group(dest, &parts).unwrap(),
+            b"#!/bin/sh\necho hi\n"
+        );
+
+        // Byte-identical copies (e.g. the same file under two labels) pass.
+        let identical = [
+            GroupPart {
+                template: "a",
+                labels: &labels,
+                rendered: &script,
+            },
+            GroupPart {
+                template: "b",
+                labels: &labels,
+                rendered: &script,
+            },
+        ];
+        assert_eq!(
+            combine_group(dest, &identical).unwrap(),
+            b"#!/bin/sh\necho hi\n"
+        );
+
+        // Differing copies name both templates instead of concatenating.
+        let differing = [
+            GroupPart {
+                template: "a",
+                labels: &labels,
+                rendered: &script,
+            },
+            GroupPart {
+                template: "b",
+                labels: &labels,
+                rendered: &other,
+            },
+        ];
+        let err = combine_group(dest, &differing).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("`a`") && message.contains("`b`"),
+            "{message}"
+        );
+        assert!(message.contains("distinct destinations"), "{message}");
+
+        // Copies never mix with text or structured output.
+        let structured = Rendered::Structured {
+            value: json("{\"a\": 1}"),
+            format: DocFormat::Json,
+        };
+        for other in [&text, &structured] {
+            let mixed = [
+                GroupPart {
+                    template: "a",
+                    labels: &labels,
+                    rendered: &script,
+                },
+                GroupPart {
+                    template: "b",
+                    labels: &labels,
+                    rendered: other,
+                },
+            ];
+            assert!(
+                combine_group(dest, &mixed).is_err(),
+                "raw bytes must not mix"
+            );
+        }
     }
 
     #[test]

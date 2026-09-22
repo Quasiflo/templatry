@@ -6,6 +6,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 use crate::config::{
     self, Configs, PROJECT_CONFIG_PATH, ProjectConfig, SOURCE_CONFIG_FILENAME, SourceFile,
     SourceKind, Template,
@@ -34,6 +37,10 @@ pub struct PlannedWrite {
     pub dest: PathBuf,
     /// Complete bytes to write.
     pub content: Vec<u8>,
+    /// Unix permission bits (masked to `0o7777`) mirrored from the template
+    /// after writing; `None` leaves new files at default permissions.
+    /// Only strategy `none` copies set this today.
+    pub mode: Option<u32>,
 }
 
 /// Generate configuration files for the current project.
@@ -134,15 +141,25 @@ pub(crate) fn group_members(
     Ok(groups)
 }
 
-/// Render one destination group into final bytes.
+/// Render one destination group into final bytes plus an optional mode.
+///
+/// The mode is the template's permission bits for single-member `none`
+/// groups (a straight copy); shared destinations never preserve permissions.
+pub(crate) struct RenderedGroup {
+    pub content: Vec<u8>,
+    pub mode: Option<u32>,
+}
+
+/// Render one destination group into its final bytes plus an optional mode.
 pub(crate) fn render_group(
     dest: &Path,
     members: &[GroupMember],
     context: &ProjectContext,
-) -> crate::Result<Vec<u8>> {
+) -> crate::Result<RenderedGroup> {
     let mut rendered = Vec::with_capacity(members.len());
+    let mut modes = Vec::with_capacity(members.len());
     for member in members {
-        let output = render_template(
+        let (output, mode) = render_template(
             &member.template,
             &member.name,
             &context.source_root,
@@ -150,6 +167,7 @@ pub(crate) fn render_group(
             &context.source.configs,
         )?;
         rendered.push((member.name.as_str(), &member.labels, output));
+        modes.push(mode);
     }
     let parts: Vec<GroupPart<'_>> = rendered
         .iter()
@@ -159,7 +177,13 @@ pub(crate) fn render_group(
             rendered: output,
         })
         .collect();
-    merge::combine_group(dest, &parts)
+    let content = merge::combine_group(dest, &parts)?;
+    let mode = if members.len() == 1 {
+        modes.into_iter().next().flatten()
+    } else {
+        None
+    };
+    Ok(RenderedGroup { content, mode })
 }
 
 /// Compute the full write plan without touching disk (the test seam for [`run`]).
@@ -178,11 +202,12 @@ pub(crate) fn render_plan(
 ) -> crate::Result<Vec<PlannedWrite>> {
     let mut plan = Vec::with_capacity(groups.len());
     for (dest, members) in groups {
-        let content = render_group(dest, members, context)?;
-        let content = preserve_group(dest, &content, members)?;
+        let group = render_group(dest, members, context)?;
+        let content = preserve_group(dest, &group.content, members)?;
         plan.push(PlannedWrite {
             dest: dest.clone(),
             content,
+            mode: group.mode,
         });
     }
     Ok(plan)
@@ -238,22 +263,28 @@ fn parse_ignore_pattern(pattern: &str) -> crate::Result<crate::backprop::IgnoreP
     })
 }
 
-/// Write every planned file atomically.
+/// Write every planned file atomically, mirroring template permissions
+/// where the plan carries them.
 pub(crate) fn write_plan(plan: &[PlannedWrite]) -> crate::Result<()> {
     for write in plan {
-        atomic_write(&write.dest, &write.content)?;
+        atomic_write(&write.dest, &write.content, write.mode)?;
     }
     Ok(())
 }
 
-/// Render one template with its project override into a [`Rendered`] output.
+/// Render one template with its project override into a [`Rendered`] output,
+/// plus the template's permission bits when the strategy is a straight copy.
+///
+/// Strategy `none` copies raw bytes with no decoding (non-UTF-8 survives)
+/// and mirrors permissions at write time; every other strategy renders text
+/// and leaves permissions alone.
 pub(crate) fn render_template(
     template: &Template,
     name: &str,
     source_root: &Path,
     project_root: &Path,
     configs: &Configs,
-) -> crate::Result<Rendered> {
+) -> crate::Result<(Rendered, Option<u32>)> {
     let template_path = source_root.join(template.template_path()?);
     let template_bytes = crate::read_file_bytes(&template_path)?;
     let generated_filename = template.resolved_generated_file()?;
@@ -261,6 +292,24 @@ pub(crate) fn render_template(
 
     let override_dir = project_root.join(template.resolved_override_dir(configs));
     let override_path = override_dir.join(template.resolved_override_file()?);
+    if strategy == EffectiveStrategy::None {
+        let local_present = match template
+            .local_override_file
+            .as_deref()
+            .filter(|name| !name.trim().is_empty())
+        {
+            Some(name) => read_optional(&override_dir.join(name), "local override file")?.is_some(),
+            None => false,
+        };
+        if read_optional(&override_path, "override file")?.is_some() || local_present {
+            tracing::warn!(
+                template = name,
+                "overrides ignored: strategy `none` always copies the template verbatim"
+            );
+        }
+        let mode = template_mode(&template_path)?;
+        return Ok((Rendered::Bytes(template_bytes), mode));
+    }
     let override_text = match read_optional(&override_path, "override file")? {
         Some(bytes) => Some(decode(&bytes, &override_path)?),
         None => None,
@@ -296,19 +345,42 @@ pub(crate) fn render_template(
                     "local override ignored: strategy `replace` emits the override verbatim"
                 );
             }
-            Ok(Rendered::Text(text))
+            Ok((Rendered::Text(text), None))
         }
         _ => {
             let template_text = decode(&template_bytes, &template_path)?;
-            render_contents(
+            let rendered = render_contents(
                 &template_text,
                 override_text.as_deref(),
                 local_text.as_deref(),
                 strategy,
                 template.array_policy.unwrap_or_default(),
                 name,
-            )
+            )?;
+            Ok((rendered, None))
         }
+    }
+}
+
+/// Template permission bits (masked to `0o7777`) for straight copies.
+///
+/// `None` off Unix, where permission bits have no meaning to mirror.
+fn template_mode(path: &Path) -> crate::Result<Option<u32>> {
+    #[cfg(unix)]
+    {
+        let mode = std::fs::metadata(path)
+            .map_err(|err| {
+                crate::invalid(path, format!("cannot read template permissions: {err}"))
+            })?
+            .permissions()
+            .mode()
+            & 0o7777;
+        Ok(Some(mode))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Ok(None)
     }
 }
 
@@ -501,8 +573,9 @@ fn apply_check(plan: &[PlannedWrite]) -> crate::Result<()> {
     })
 }
 
-/// Write a file atomically via temp-file-plus-rename in the same directory.
-pub(crate) fn atomic_write(dest: &Path, content: &[u8]) -> crate::Result<()> {
+/// Write a file atomically via temp-file-plus-rename in the same directory,
+/// mirroring Unix permission bits when given.
+pub(crate) fn atomic_write(dest: &Path, content: &[u8], mode: Option<u32>) -> crate::Result<()> {
     let parent = dest.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(parent)
         .map_err(|err| crate::invalid(dest, format!("cannot create parent directory: {err}")))?;
@@ -513,6 +586,13 @@ pub(crate) fn atomic_write(dest: &Path, content: &[u8]) -> crate::Result<()> {
     staged
         .persist(dest)
         .map_err(|err| crate::invalid(dest, format!("cannot replace file: {}", err.error)))?;
+    #[cfg(unix)]
+    if let Some(mode) = mode {
+        std::fs::set_permissions(dest, std::fs::Permissions::from_mode(mode))
+            .map_err(|err| crate::invalid(dest, format!("cannot mirror permissions: {err}")))?;
+    }
+    #[cfg(not(unix))]
+    let _ = mode;
     Ok(())
 }
 
@@ -529,6 +609,7 @@ mod tests {
         match rendered {
             Rendered::Structured { value, .. } => value,
             Rendered::Text(text) => panic!("expected structured, got text: {text}"),
+            Rendered::Bytes(bytes) => panic!("expected structured, got bytes: {bytes:?}"),
         }
     }
 
@@ -536,6 +617,7 @@ mod tests {
         match rendered {
             Rendered::Text(text) => text,
             Rendered::Structured { .. } => panic!("expected text, got structured"),
+            Rendered::Bytes(bytes) => panic!("expected text, got bytes: {bytes:?}"),
         }
     }
 
@@ -701,5 +783,57 @@ mod tests {
         )
         .unwrap();
         assert_eq!(rendered_text(rendered), "T");
+    }
+
+    #[test]
+    fn none_strategy_copies_raw_bytes_and_mode() {
+        use crate::config::Strategy;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let templates = dir.path().join("templates");
+        std::fs::create_dir_all(&templates).expect("mkdirs");
+        // Invalid UTF-8 must survive: straight copies never decode.
+        let bytes = b"#!/bin/sh\necho '\xff\xfe'\n".to_vec();
+        std::fs::write(templates.join("run.bin"), &bytes).expect("write template");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(
+                templates.join("run.bin"),
+                std::fs::Permissions::from_mode(0o750),
+            )
+            .expect("chmod template");
+        }
+        let template = crate::config::Template {
+            template: Some("run.bin".to_string()),
+            extends: None,
+            override_file: None,
+            override_dir: None,
+            local_override_file: None,
+            generated_file: None,
+            generated_dir: None,
+            strategy: Some(Strategy::None),
+            array_policy: None,
+            back_propagate: None,
+            backprop_ignore: Vec::new(),
+            backprop_ignore_values: Vec::new(),
+            labels: BTreeSet::new(),
+        };
+        let (rendered, mode) = render_template(
+            &template,
+            "run",
+            &templates,
+            dir.path(),
+            &crate::config::Configs::default(),
+        )
+        .unwrap();
+        match rendered {
+            Rendered::Bytes(out) => assert_eq!(out, bytes),
+            other => panic!("expected raw bytes, got {other:?}"),
+        }
+        #[cfg(unix)]
+        assert_eq!(mode, Some(0o750), "template mode captured");
+        #[cfg(not(unix))]
+        assert_eq!(mode, None);
     }
 }

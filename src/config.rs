@@ -519,7 +519,8 @@ pub enum Strategy {
     AppendBottom,
     /// Emit the override file verbatim, ignoring the template.
     Replace,
-    /// Copy the template file verbatim, ignoring any override.
+    /// Straight copy of the template file: raw bytes plus (on Unix) its
+    /// permission bits, ignoring any override.
     None,
 }
 
