@@ -68,7 +68,9 @@ templatry --watch               # alias for generate --watch
 [source]
 path = "../templates"
 
-# GitHub release asset: ref is the release tag, asset is a glob.
+# GitHub release: ref is the release tag. With `asset` (a glob) it downloads
+# the matching uploaded file; without it, the release's default source
+# archive (tarball).
 [source]
 github = "myorg/team-configs"
 ref = "v1.2.3"
@@ -86,7 +88,7 @@ ref = "v1.2.3"
 # root = "templates" # subdirectory holding templatry.source.toml
 ```
 
-Rules: `ref` is required for GitHub and git kinds and rejected as meaningless for local and URL kinds. Branches are rejected and abbreviated SHAs fail (pin a tag or full 40-character SHA). Private GitHub sources read `TEMPLATRY_GITHUB_TOKEN`, falling back to ambient `GITHUB_TOKEN`/`GH_TOKEN`, for API and download requests only. Labels layer on top of the source defaults:
+Rules: `ref` is required for GitHub and git kinds and rejected as meaningless for local and URL kinds. `asset` is GitHub-only and optional (uploaded-asset glob; omit for the default source archive). Branches are rejected and abbreviated SHAs fail (pin a tag or full 40-character SHA). Private GitHub sources read `TEMPLATRY_GITHUB_TOKEN`, falling back to ambient `GITHUB_TOKEN`/`GH_TOKEN`, for API and download requests only. Labels layer on top of the source defaults:
 
 ```toml
 [source]

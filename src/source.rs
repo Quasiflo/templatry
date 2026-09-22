@@ -393,6 +393,63 @@ fn parse_release_assets(
     Ok(parsed)
 }
 
+/// Default source archive URL from a get-release-by-tag response.
+///
+/// The `assets` array only lists *uploaded* files: releases with none still
+/// ship GitHub's auto-generated archives, advertised as `tarball_url` (and
+/// `zipball_url`). The tarball (`.tar.gz`) is the conventional default.
+fn release_tarball_url<'a>(
+    body: &'a serde_json::Value,
+    repo: &str,
+    tag: &str,
+) -> crate::Result<&'a str> {
+    body.get("tarball_url")
+        .and_then(serde_json::Value::as_str)
+        .filter(|url| !url.is_empty())
+        .ok_or_else(|| {
+            crate::invalid(
+                Path::new("api.github.com"),
+                format!("unexpected release response for `{repo}@{tag}`: missing `tarball_url`"),
+            )
+        })
+}
+
+/// Lift a lone top-level directory's contents into `entry`.
+///
+/// GitHub source archives wrap the tree in one directory (`{repo}-{tag}/`):
+/// unwrapping it puts `templatry.source.toml` at the entry root. Anything
+/// else (several entries, a lone file) is left for downstream checks.
+fn lift_single_top_level(entry: &Path) -> crate::Result<()> {
+    let mut members = std::fs::read_dir(entry)
+        .map_err(|err| crate::invalid(entry, format!("cannot list extracted archive: {err}")))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| crate::invalid(entry, format!("cannot list extracted archive: {err}")))?;
+    if members.len() == 1 && members[0].path().is_dir() {
+        let top = members.pop().expect("one directory entry");
+        let children = std::fs::read_dir(top.path())
+            .map_err(|err| crate::invalid(entry, format!("cannot list extracted archive: {err}")))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| {
+                crate::invalid(entry, format!("cannot list extracted archive: {err}"))
+            })?;
+        for child in children {
+            let target = entry.join(child.file_name());
+            std::fs::rename(child.path(), &target).map_err(|err| {
+                crate::invalid(
+                    entry,
+                    format!("cannot unwrap archived top-level directory: {err}"),
+                )
+            })?;
+        }
+        std::fs::remove_dir(top.path()).map_err(|err| {
+            crate::invalid(
+                entry,
+                format!("cannot unwrap archived top-level directory: {err}"),
+            )
+        })?;
+    }
+    Ok(())
+}
 /// Select the single asset matching the `asset` glob.
 ///
 /// Zero matches and multi-matches both fail; the multi-match error lists the
@@ -475,7 +532,7 @@ async fn fetch_github(source: &SourceRef, entry: &Path) -> crate::Result<Option<
         .as_deref()
         .expect("kind() guarantees `github`");
     let tag = source.r#ref.as_deref().expect("kind() guarantees `ref`");
-    let pattern = source.asset.as_deref().expect("kind() guarantees `asset`");
+    let pattern = source.asset.as_deref().filter(|asset| !asset.is_empty());
     let token = github_token();
     let client = http_client()?;
 
@@ -516,37 +573,66 @@ async fn fetch_github(source: &SourceRef, entry: &Path) -> crate::Result<Option<
             format!("cannot parse GitHub release response: {err}"),
         )
     })?;
-    let assets = parse_release_assets(&body, repo, tag)?;
-    let chosen = select_asset(&assets, pattern)?;
-    tracing::info!(asset = %chosen.name, "downloading release asset");
+    let (display, url, kind, accept) = match pattern {
+        Some(pattern) => {
+            let assets = parse_release_assets(&body, repo, tag)?;
+            let chosen = select_asset(&assets, pattern)?;
+            tracing::info!(asset = %chosen.name, "downloading release asset");
+            (
+                format!("asset `{}`", chosen.name),
+                chosen.browser_url.clone(),
+                ArchiveKind::detect(&chosen.name)?,
+                // Required by the release-asset download endpoint.
+                "application/octet-stream",
+            )
+        }
+        // No `asset` glob: the release's default source archive. Uploaded
+        // assets are optional on GitHub, so `assets` may legitimately be
+        // empty here — the tarball always exists.
+        None => {
+            let tarball_url = release_tarball_url(&body, repo, tag)?;
+            tracing::info!(%repo, %tag, "downloading default source archive (tarball)");
+            (
+                format!("source archive for `{repo}@{tag}`"),
+                tarball_url.to_string(),
+                ArchiveKind::TarGz,
+                // Versioned API media type: `application/octet-stream`
+                // answers 415 on this endpoint.
+                "application/vnd.github+json",
+            )
+        }
+    };
 
-    let mut request = client
-        .get(&chosen.browser_url)
-        .header("Accept", "application/octet-stream");
+    let mut request = client.get(&url).header("Accept", accept);
+    if pattern.is_none() {
+        request = request.header("X-GitHub-Api-Version", GITHUB_API_VERSION);
+    }
     if let Some(token) = token {
         request = request.bearer_auth(token);
     }
     let response = request.send().await.map_err(|err| {
         crate::invalid(
             Path::new("api.github.com"),
-            format!("cannot download asset `{}`: {err}", chosen.name),
+            format!("cannot download {display}: {err}"),
         )
     })?;
     let response = response.error_for_status().map_err(|err| {
         crate::invalid(
             Path::new("api.github.com"),
-            format!("asset download `{}` failed: {err}", chosen.name),
+            format!("{display} download failed: {err}"),
         )
     })?;
     let bytes = response.bytes().await.map_err(|err| {
         crate::invalid(
             Path::new("api.github.com"),
-            format!("cannot read asset `{}`: {err}", chosen.name),
+            format!("cannot read {display}: {err}"),
         )
     })?;
 
-    let archive = ArchiveKind::detect(&chosen.name)?;
-    extract_archive(archive, bytes.to_vec(), entry).await?;
+    extract_archive(kind, bytes.to_vec(), entry).await?;
+    if pattern.is_none() {
+        lift_single_top_level(entry)?;
+    }
     Ok(None)
 }
 
@@ -901,6 +987,49 @@ mod tests {
             err.to_string().contains("no downloadable assets"),
             "{err:?}"
         );
+    }
+
+    #[test]
+    fn default_archive_uses_tarball_url() {
+        let body: serde_json::Value = serde_json::from_str(
+            r#"{"assets": [], "tarball_url": "https://api.github.com/repos/o/r/tarball/v1"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            release_tarball_url(&body, "org/repo", "v1").unwrap(),
+            "https://api.github.com/repos/o/r/tarball/v1"
+        );
+
+        // Empty-asset releases are the norm this path serves, not an error.
+        let body: serde_json::Value = serde_json::from_str(r#"{"assets": []}"#).unwrap();
+        let err = release_tarball_url(&body, "org/repo", "v1").unwrap_err();
+        assert!(err.to_string().contains("missing `tarball_url`"), "{err:?}");
+    }
+
+    #[test]
+    fn single_top_level_directory_lifts() {
+        // GitHub source archives wrap the tree once: unwrap it.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let top = dir.path().join("repo-v1");
+        std::fs::create_dir_all(top.join("nested")).expect("mkdirs");
+        std::fs::write(top.join("templatry.source.toml"), "[x]\n").expect("write");
+        std::fs::write(top.join("nested").join("f.txt"), "f").expect("write");
+        lift_single_top_level(dir.path()).expect("lift");
+        assert!(dir.path().join("templatry.source.toml").is_file());
+        assert!(dir.path().join("nested").join("f.txt").is_file());
+        assert!(!top.exists(), "wrapper removed");
+
+        // Anything else stays put for downstream checks.
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("a.txt"), "a").expect("write");
+        std::fs::write(dir.path().join("b.txt"), "b").expect("write");
+        lift_single_top_level(dir.path()).expect("no lift");
+        assert!(dir.path().join("a.txt").is_file());
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("lone.txt"), "l").expect("write");
+        lift_single_top_level(dir.path()).expect("no lift");
+        assert!(dir.path().join("lone.txt").is_file());
     }
 
     #[test]

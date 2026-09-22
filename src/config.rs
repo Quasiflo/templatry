@@ -62,7 +62,8 @@ pub struct SourceRef {
     /// Subdirectory of the fetched source holding `templatry.source.toml`.
     #[serde(default)]
     pub root: Option<String>,
-    /// GitHub release asset glob (e.g. `configs_*.zip`).
+    /// GitHub release asset glob (e.g. `configs_*.zip`); omit to download
+    /// the release's default source archive (tarball) instead.
     #[serde(default)]
     pub asset: Option<String>,
     /// Use HTTPS instead of SSH for git checkout sources.
@@ -157,7 +158,6 @@ impl SourceRef {
             }
             "github" => {
                 self.require_ref("GitHub release sources", "release tag")?;
-                self.require_asset()?;
                 self.forbid_use_https("GitHub release sources")?;
                 if value.contains("://") {
                     return Err(crate::invalid(
@@ -222,15 +222,6 @@ impl SourceRef {
                     format!("{who} require `ref` ({what})"),
                 )
             })
-    }
-
-    fn require_asset(&self) -> crate::Result<&str> {
-        self.asset.as_deref().filter(|a| !a.is_empty()).ok_or_else(|| {
-            crate::invalid(
-                Path::new("templatry.toml"),
-                "GitHub release sources require `asset` (release asset glob, e.g. `configs_*.zip`)",
-            )
-        })
     }
 
     fn forbid_ref(&self, who: &str) -> crate::Result<()> {
@@ -1466,15 +1457,15 @@ exclude_labels = ["dart"]
         let source = project_ref("github = \"org/repo\"\nref = \"v1\"\nasset = \"c_*.zip\"\n");
         assert_eq!(source.kind().unwrap(), SourceKind::GitHubRelease);
 
+        // `asset` is optional: omitting it downloads the release's default
+        // source archive (tarball) instead of matching an uploaded asset.
+        let source = project_ref("github = \"org/repo\"\nref = \"v1\"\n");
+        assert_eq!(source.kind().unwrap(), SourceKind::GitHubRelease);
+
         let err = project_ref("github = \"org/repo\"\nasset = \"c_*.zip\"\n")
             .kind()
             .unwrap_err();
         assert!(err.to_string().contains("require `ref`"), "{err:?}");
-
-        let err = project_ref("github = \"org/repo\"\nref = \"v1\"\n")
-            .kind()
-            .unwrap_err();
-        assert!(err.to_string().contains("require `asset`"), "{err:?}");
 
         let err =
             project_ref("github = \"https://github.com/org/repo\"\nref = \"v1\"\nasset = \"c\"\n")
