@@ -827,12 +827,19 @@ mod tests {
         paths.iter().cloned().collect()
     }
 
-    #[test]
-    fn dispatch_override_regenerates_forward() {
+    /// Fresh tempdir-backed subscriptions plus write guard for dispatch
+    /// tests. The tempdir is returned to keep it alive.
+    fn dispatch_fixture() -> (tempfile::TempDir, PathBuf, Subscriptions, WriteGuard) {
         let dir = tempfile::tempdir().expect("tempdir");
         let root = dir.path().canonicalize().expect("canonicalize");
         let subscriptions = test_subscriptions(&root);
         let guard = WriteGuard::new(GUARD_WINDOW);
+        (dir, root, subscriptions, guard)
+    }
+
+    #[test]
+    fn dispatch_override_regenerates_forward() {
+        let (_dir, root, subscriptions, guard) = dispatch_fixture();
 
         let paths = set(&[root.join("override.json")]);
         let Dispatch::Regenerate { forward, backprop } = classify(&paths, &subscriptions, &guard)
@@ -845,10 +852,7 @@ mod tests {
 
     #[test]
     fn dispatch_generated_folds_back() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let root = dir.path().canonicalize().expect("canonicalize");
-        let subscriptions = test_subscriptions(&root);
-        let guard = WriteGuard::new(GUARD_WINDOW);
+        let (_dir, root, subscriptions, guard) = dispatch_fixture();
 
         let paths = set(&[root.join("generated").join("live.json")]);
         let Dispatch::Regenerate { forward, backprop } = classify(&paths, &subscriptions, &guard)
@@ -861,10 +865,7 @@ mod tests {
 
     #[test]
     fn dispatch_config_changes_reload() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let root = dir.path().canonicalize().expect("canonicalize");
-        let subscriptions = test_subscriptions(&root);
-        let guard = WriteGuard::new(GUARD_WINDOW);
+        let (_dir, root, subscriptions, guard) = dispatch_fixture();
 
         let project = set(&[root.join(".config").join("templatry.toml")]);
         assert_eq!(classify(&project, &subscriptions, &guard), Dispatch::Reload);
@@ -875,10 +876,7 @@ mod tests {
 
     #[test]
     fn dispatch_ignores_unknown_and_self_writes() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let root = dir.path().canonicalize().expect("canonicalize");
-        let subscriptions = test_subscriptions(&root);
-        let guard = WriteGuard::new(GUARD_WINDOW);
+        let (_dir, root, subscriptions, guard) = dispatch_fixture();
 
         let unknown = set(&[root.join("unrelated.txt")]);
         assert_eq!(classify(&unknown, &subscriptions, &guard), Dispatch::Ignore);

@@ -53,6 +53,29 @@ async fn settle() {
     tokio::time::sleep(Duration::from_millis(700)).await;
 }
 
+/// Copy a watch fixture to a tempdir and start the watcher: returns the
+/// tempdir (keep it alive), case root, generated/override paths, and the
+/// background task (abort it at the end of the test).
+fn spawn_watch(
+    case: &str,
+) -> (
+    tempfile::TempDir,
+    PathBuf,
+    PathBuf,
+    PathBuf,
+    tokio::task::JoinHandle<templatry::Result<()>>,
+) {
+    let (temp, root) = common::setup_case("watch", case);
+    let generated: PathBuf = root.join(".config").join("generated").join("app.json");
+    let override_file: PathBuf = root.join(".config").join("app.json");
+    let task_root = root.clone();
+    let task = tokio::spawn(async move {
+        let options = options(&task_root);
+        templatry::watch::run(&options).await
+    });
+    (temp, root, generated, override_file, task)
+}
+
 #[test]
 fn all_watch_fixtures_are_known() {
     let names: Vec<String> = common::cases("watch")
@@ -119,14 +142,7 @@ async fn watch_regenerates_reloads_and_stops_cleanly() {
 
 #[tokio::test]
 async fn watch_backpropagates_generated_edits() {
-    let (_temp, root) = common::setup_case("watch", "backprop");
-    let generated: PathBuf = root.join(".config").join("generated").join("app.json");
-    let override_file: PathBuf = root.join(".config").join("app.json");
-
-    let task = tokio::spawn(async move {
-        let options = options(&root);
-        templatry::watch::run(&options).await
-    });
+    let (_temp, _root, generated, override_file, task) = spawn_watch("backprop");
 
     poll_until(
         &generated,
@@ -187,14 +203,7 @@ async fn watch_backpropagates_generated_edits() {
 
 #[tokio::test]
 async fn watch_maintains_ignored_state() {
-    let (_temp, root) = common::setup_case("watch", "backprop-ignore");
-    let generated: PathBuf = root.join(".config").join("generated").join("app.json");
-    let override_file: PathBuf = root.join(".config").join("app.json");
-
-    let task = tokio::spawn(async move {
-        let options = options(&root);
-        templatry::watch::run(&options).await
-    });
+    let (_temp, _root, generated, override_file, task) = spawn_watch("backprop-ignore");
 
     poll_until(
         &generated,
@@ -254,15 +263,8 @@ async fn watch_maintains_ignored_state() {
 #[tokio::test]
 async fn watch_local_layer_flows_and_folds_to_override() {
     init_logging();
-    let (_temp, root) = common::setup_case("watch", "local-backprop");
-    let generated: PathBuf = root.join(".config").join("generated").join("app.json");
-    let override_file: PathBuf = root.join(".config").join("app.json");
+    let (_temp, root, generated, override_file, task) = spawn_watch("local-backprop");
     let local_file: PathBuf = root.join(".config").join("app.local.json");
-
-    let task = tokio::spawn(async move {
-        let options = options(&root);
-        templatry::watch::run(&options).await
-    });
 
     // No local file yet: template plus override only.
     poll_until(

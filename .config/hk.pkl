@@ -16,8 +16,15 @@ local function collect(category: String) = new Group {
 }
 
 local _steps = new Mapping {
+  ["fix"] = collect("fix")
   ["format"] = collect("format")
-  ["lint"] = collect("lint")
+  ["lint"] = (collect("lint")){
+    steps {
+      ["[lint] file extensions"] {
+        exclude = super.exclude + List("tests/fixtures/**")
+      }
+    }
+  }
   ["common"] = collect("common")
 }
 

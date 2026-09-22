@@ -139,6 +139,14 @@ pub enum BackpropOutcome {
     NoChange,
 }
 
+/// Members willing to absorb a hand-edit.
+fn backprop_candidates<'a>(members: &'a [MemberView<'a>]) -> Vec<&'a MemberView<'a>> {
+    members
+        .iter()
+        .filter(|member| member.back_propagate)
+        .collect()
+}
+
 /// Fold a hand-edit into overrides: `last_bytes` is the previous generated
 /// state, `current_bytes` the hand-edited state (the safety target).
 pub fn backpropagate(
@@ -147,10 +155,7 @@ pub fn backpropagate(
     current_bytes: &[u8],
     members: &[MemberView<'_>],
 ) -> crate::Result<BackpropOutcome> {
-    let candidates: Vec<&MemberView<'_>> = members
-        .iter()
-        .filter(|member| member.back_propagate)
-        .collect();
+    let candidates = backprop_candidates(members);
     if candidates.is_empty() || last_bytes == current_bytes {
         return Ok(BackpropOutcome::NoChange);
     }
@@ -208,10 +213,7 @@ pub fn reapply(
     forward_bytes: &[u8],
     members: &[MemberView<'_>],
 ) -> crate::Result<BackpropOutcome> {
-    let candidates: Vec<&MemberView<'_>> = members
-        .iter()
-        .filter(|member| member.back_propagate)
-        .collect();
+    let candidates = backprop_candidates(members);
     if candidates.is_empty() || last_bytes == captured_bytes {
         return Ok(BackpropOutcome::NoChange);
     }
@@ -1280,18 +1282,84 @@ mod tests {
         )
     }
 
+    /// Combined group output for the two-contributor attribution fixture.
+    fn combined_pair(
+        rust: &BTreeSet<String>,
+        dart: &BTreeSet<String>,
+        rust_json: &str,
+        dart_json: &str,
+    ) -> Vec<u8> {
+        let contributions = [
+            merge::Contribution {
+                template: "a",
+                labels: rust,
+                value: parse(rust_json),
+            },
+            merge::Contribution {
+                template: "b",
+                labels: dart,
+                value: parse(dart_json),
+            },
+        ];
+        merge::serialize_doc(
+            &merge::combine_structured(&contributions).unwrap(),
+            DocFormat::Json,
+        )
+        .unwrap()
+        .into_bytes()
+    }
+
+    /// Two members with disjoint templates for shared-destination tests: the
+    /// same `{"a": 1}` template under both labels, writing wherever told.
+    fn member_pair<'a>(
+        rust: &'a BTreeSet<String>,
+        dart: &'a BTreeSet<String>,
+        rust_path: Option<&'a Path>,
+        dart_path: Option<&'a Path>,
+    ) -> [MemberView<'a>; 2] {
+        [
+            viewed_member(
+                "rust-part",
+                rust,
+                rust_path,
+                "{\"a\": 1}",
+                None,
+                None,
+                EffectiveStrategy::Structured(DocFormat::Json),
+            ),
+            viewed_member(
+                "dart-part",
+                dart,
+                dart_path,
+                "{\"a\": 1}",
+                None,
+                None,
+                EffectiveStrategy::Structured(DocFormat::Json),
+            ),
+        ]
+    }
+
     fn parse(text: &str) -> Value {
         merge::parse_doc(text, DocFormat::Json, "test").expect("test json parses")
     }
 
-    fn last_of(template_text: &str, override_text: Option<&str>) -> Vec<u8> {
-        let base = parse(template_text);
-        let merged = match override_text {
+    /// Replay bytes back into a value for assertions.
+    fn replay_json(replay: &[u8]) -> Value {
+        parse(std::str::from_utf8(replay).expect("replay is UTF-8"))
+    }
+
+    /// Merge one optional layer over a base value (test scaffolding).
+    fn merge_layer(base: Value, layer_text: Option<&str>) -> Value {
+        match layer_text {
             Some(text) => {
                 merge::merge_structured(base, parse(text), ArrayPolicy::Union, "t").unwrap()
             }
             None => base,
-        };
+        }
+    }
+
+    fn last_of(template_text: &str, override_text: Option<&str>) -> Vec<u8> {
+        let merged = merge_layer(parse(template_text), override_text);
         merge::serialize_doc(&merged, DocFormat::Json)
             .unwrap()
             .into_bytes()
@@ -1317,6 +1385,15 @@ mod tests {
         )
     }
 
+    /// Assert a fold emptied the override to `{}` and replayed the expected
+    /// JSON; returns the winning member for attribution checks.
+    fn assert_override_emptied(outcome: BackpropOutcome, expected_replay: &str) -> String {
+        let (member, text, replay) = applied_override(outcome);
+        assert_eq!(parse(&text), parse("{}"));
+        assert_eq!(replay_json(&replay), parse(expected_replay));
+        member
+    }
+
     #[test]
     fn scalar_change_folds_into_override() {
         let labels = labels(&["rust"]);
@@ -1331,10 +1408,7 @@ mod tests {
         let outcome = backpropagate(Path::new("out.json"), &last, current, &members).unwrap();
         let (member, _, replay) = applied_override(outcome);
         assert_eq!(member, "app");
-        assert_eq!(
-            parse(std::str::from_utf8(&replay).unwrap()),
-            parse("{\"a\": 1, \"b\": 30}")
-        );
+        assert_eq!(replay_json(&replay), parse("{\"a\": 1, \"b\": 30}"));
     }
 
     #[test]
@@ -1345,10 +1419,7 @@ mod tests {
         let members = [json_member("app", &labels, "{\"a\": 1}", None)];
         let outcome = backpropagate(Path::new("out.json"), &last, current, &members).unwrap();
         let (_, _, replay) = applied_override(outcome);
-        assert_eq!(
-            parse(std::str::from_utf8(&replay).unwrap()),
-            parse("{\"a\": 1, \"fresh\": true}")
-        );
+        assert_eq!(replay_json(&replay), parse("{\"a\": 1, \"fresh\": true}"));
     }
 
     #[test]
@@ -1379,8 +1450,7 @@ mod tests {
             Some("{\"extra\": 9}"),
         )];
         let outcome = backpropagate(Path::new("out.json"), &last, current, &members).unwrap();
-        let (_, text, _) = applied_override(outcome);
-        assert_eq!(parse(&text), parse("{}"));
+        assert_override_emptied(outcome, "{\"a\": 1}");
     }
 
     #[test]
@@ -1395,12 +1465,7 @@ mod tests {
             Some("{\"k\": 2}"),
         )];
         let outcome = backpropagate(Path::new("out.json"), &last, current, &members).unwrap();
-        let (_, text, replay) = applied_override(outcome);
-        assert_eq!(parse(&text), parse("{}"));
-        assert_eq!(
-            parse(std::str::from_utf8(&replay).unwrap()),
-            parse("{\"k\": 1}")
-        );
+        assert_override_emptied(outcome, "{\"k\": 1}");
     }
 
     #[test]
@@ -1434,12 +1499,7 @@ mod tests {
             ),
         ];
         let outcome = backpropagate(Path::new("out.json"), &last, current, &members).unwrap();
-        let (_, text, replay) = applied_override(outcome);
-        assert_eq!(parse(&text), parse("{}"));
-        assert_eq!(
-            parse(std::str::from_utf8(&replay).unwrap()),
-            parse("{\"k\": 1}")
-        );
+        assert_override_emptied(outcome, "{\"k\": 1}");
     }
 
     #[test]
@@ -1485,53 +1545,43 @@ mod tests {
             ),
         ];
         let outcome = backpropagate(Path::new("out.json"), last, current, &members).unwrap();
-        let (member, text, replay) = applied_override(outcome);
-        assert_eq!(member, "common");
-        assert_eq!(parse(&text), parse("{}"));
-        assert_eq!(
-            parse(std::str::from_utf8(&replay).unwrap()),
-            parse("{\"doc\": 1, \"k\": 1, \"rumdl.lint.run\": \"onSave\", \"toml\": 1}")
+        let member = assert_override_emptied(
+            outcome,
+            "{\"doc\": 1, \"k\": 1, \"rumdl.lint.run\": \"onSave\", \"toml\": 1}",
         );
+        assert_eq!(member, "common");
     }
 
     #[test]
-    fn append_bottom_revert_to_empty_round_trips() {
+    fn append_reverts_to_empty_round_trip() {
         // Reverting the only override content folds to an empty layer, which
-        // renders as absent (no stray separator) and reproduces the file.
+        // renders as absent (no stray separator) and reproduces the file —
+        // whichever side the override sits on.
         let labels = labels(&[]);
-        let members = [view(
-            "banner",
-            &labels,
-            "TEMPLATE\n",
-            Some("MYLINE=1\n"),
-            EffectiveStrategy::AppendBottom,
-        )];
-        let last = b"TEMPLATE\n\nMYLINE=1\n";
-        let current = b"TEMPLATE\n";
-        let outcome = backpropagate(Path::new("out.txt"), last, current, &members).unwrap();
-        let (member, override_text, replay) = applied(outcome);
-        assert_eq!(member, "banner");
-        assert_eq!(override_text.as_deref(), Some(""));
-        assert_eq!(replay, current);
-    }
-
-    #[test]
-    fn append_top_revert_to_empty_round_trips() {
-        let labels = labels(&[]);
-        let members = [view(
-            "banner",
-            &labels,
-            "TEMPLATE\n",
-            Some("O=1\n"),
-            EffectiveStrategy::AppendTop,
-        )];
-        let last = b"O=1\n\nTEMPLATE\n";
-        let current = b"TEMPLATE\n";
-        let outcome = backpropagate(Path::new("out.txt"), last, current, &members).unwrap();
-        let (member, override_text, replay) = applied(outcome);
-        assert_eq!(member, "banner");
-        assert_eq!(override_text.as_deref(), Some(""));
-        assert_eq!(replay, current);
+        for (strategy, last) in [
+            (
+                EffectiveStrategy::AppendBottom,
+                b"TEMPLATE\n\nO=1\n".as_slice(),
+            ),
+            (
+                EffectiveStrategy::AppendTop,
+                b"O=1\n\nTEMPLATE\n".as_slice(),
+            ),
+        ] {
+            let members = [view(
+                "banner",
+                &labels,
+                "TEMPLATE\n",
+                Some("O=1\n"),
+                strategy,
+            )];
+            let current = b"TEMPLATE\n";
+            let outcome = backpropagate(Path::new("out.txt"), last, current, &members).unwrap();
+            let (member, override_text, replay) = applied(outcome);
+            assert_eq!(member, "banner");
+            assert_eq!(override_text.as_deref(), Some(""));
+            assert_eq!(replay, current);
+        }
     }
 
     #[test]
@@ -1572,26 +1622,7 @@ mod tests {
         let dart = labels(&["dart"]);
         let last = last_of("{\"a\": 1}", None);
         let current = b"{\"a\": 1, \"z\": 3}\n";
-        let mut members = [
-            viewed_member(
-                "rust-part",
-                &rust,
-                Some(shared),
-                "{\"a\": 1}",
-                None,
-                None,
-                EffectiveStrategy::Structured(DocFormat::Json),
-            ),
-            viewed_member(
-                "dart-part",
-                &dart,
-                Some(shared),
-                "{\"a\": 1}",
-                None,
-                None,
-                EffectiveStrategy::Structured(DocFormat::Json),
-            ),
-        ];
+        let mut members = member_pair(&rust, &dart, Some(shared), Some(shared));
         for member in &mut members {
             member.ignore_keys = vec![IgnorePattern::parse("z").unwrap()];
         }
@@ -1608,45 +1639,39 @@ mod tests {
                     new_override_text.is_none(),
                     "nothing folded, nothing to write"
                 );
-                assert_eq!(
-                    parse(std::str::from_utf8(&replay_bytes).unwrap()),
-                    parse("{\"a\": 1, \"z\": 3}")
-                );
+                assert_eq!(replay_json(&replay_bytes), parse("{\"a\": 1, \"z\": 3}"));
                 assert!(["rust-part", "dart-part"].contains(&member.as_str()));
             }
             BackpropOutcome::NoChange => panic!("expected Applied"),
         }
     }
 
-    #[test]
-    fn identical_text_different_files_stay_ambiguous() {
-        // Same folded content but different override files: still ambiguous,
-        // since two files would change.
+    /// Fold an addition through the disjoint-attribution fixture, optionally
+    /// ignoring the added key in both members.
+    fn fold_disjoint_pair(ignore_z: bool) -> crate::Result<BackpropOutcome> {
         let rust = labels(&["rust"]);
         let dart = labels(&["dart"]);
         let last = last_of("{\"a\": 1}", None);
         let current = b"{\"a\": 1, \"z\": 3}\n";
-        let members = [
-            viewed_member(
-                "rust-part",
-                &rust,
-                Some(Path::new("rust.json")),
-                "{\"a\": 1}",
-                None,
-                None,
-                EffectiveStrategy::Structured(DocFormat::Json),
-            ),
-            viewed_member(
-                "dart-part",
-                &dart,
-                Some(Path::new("dart.json")),
-                "{\"a\": 1}",
-                None,
-                None,
-                EffectiveStrategy::Structured(DocFormat::Json),
-            ),
-        ];
-        let err = backpropagate(Path::new("out.json"), &last, current, &members).unwrap_err();
+        let mut members = member_pair(
+            &rust,
+            &dart,
+            Some(Path::new("rust.json")),
+            Some(Path::new("dart.json")),
+        );
+        if ignore_z {
+            for member in &mut members {
+                member.ignore_keys = vec![IgnorePattern::parse("z").unwrap()];
+            }
+        }
+        backpropagate(Path::new("out.json"), &last, current, &members)
+    }
+
+    #[test]
+    fn identical_text_different_files_stay_ambiguous() {
+        // Same folded content but different override files: still ambiguous,
+        // since two files would change.
+        let err = fold_disjoint_pair(false).unwrap_err();
         assert!(err.to_string().contains("ambiguous"), "{err:?}");
     }
 
@@ -1655,35 +1680,7 @@ mod tests {
         // Every op filters out, so no candidate writes anything and all
         // replays match: the differing (but write-free) override paths do
         // not make this ambiguous.
-        let rust = labels(&["rust"]);
-        let dart = labels(&["dart"]);
-        let last = last_of("{\"a\": 1}", None);
-        let current = b"{\"a\": 1, \"z\": 3}\n";
-        let members = [
-            viewed_member(
-                "rust-part",
-                &rust,
-                Some(Path::new("rust.json")),
-                "{\"a\": 1}",
-                None,
-                None,
-                EffectiveStrategy::Structured(DocFormat::Json),
-            ),
-            viewed_member(
-                "dart-part",
-                &dart,
-                Some(Path::new("dart.json")),
-                "{\"a\": 1}",
-                None,
-                None,
-                EffectiveStrategy::Structured(DocFormat::Json),
-            ),
-        ];
-        let mut ignored = members;
-        for member in &mut ignored {
-            member.ignore_keys = vec![IgnorePattern::parse("z").unwrap()];
-        }
-        let outcome = backpropagate(Path::new("out.json"), &last, current, &ignored).unwrap();
+        let outcome = fold_disjoint_pair(true).unwrap();
         match outcome {
             BackpropOutcome::Applied {
                 new_override_text,
@@ -1694,10 +1691,7 @@ mod tests {
                     new_override_text.is_none(),
                     "nothing folded, nothing to write"
                 );
-                assert_eq!(
-                    parse(std::str::from_utf8(&replay_bytes).unwrap()),
-                    parse("{\"a\": 1, \"z\": 3}")
-                );
+                assert_eq!(replay_json(&replay_bytes), parse("{\"a\": 1, \"z\": 3}"));
             }
             BackpropOutcome::NoChange => panic!("expected Applied"),
         }
@@ -1707,28 +1701,7 @@ mod tests {
     fn shared_edit_scopes_to_the_right_contributor() {
         let rust = labels(&["rust"]);
         let dart = labels(&["dart"]);
-        let rust_last = parse("{\"x\": 1}");
-        let dart_last = parse("{\"y\": 1}");
-        let combined = {
-            let contributions = [
-                merge::Contribution {
-                    template: "a",
-                    labels: &rust,
-                    value: rust_last,
-                },
-                merge::Contribution {
-                    template: "b",
-                    labels: &dart,
-                    value: dart_last,
-                },
-            ];
-            merge::serialize_doc(
-                &merge::combine_structured(&contributions).unwrap(),
-                DocFormat::Json,
-            )
-            .unwrap()
-            .into_bytes()
-        };
+        let combined = combined_pair(&rust, &dart, "{\"x\": 1}", "{\"y\": 1}");
         let current = b"{\"x\": 2, \"y\": 1}\n";
         let members = [
             json_member("a", &rust, "{\"x\": 1}", None),
@@ -1737,10 +1710,7 @@ mod tests {
         let outcome = backpropagate(Path::new("out.json"), &combined, current, &members).unwrap();
         let (member, _, replay) = applied_override(outcome);
         assert_eq!(member, "a");
-        assert_eq!(
-            parse(std::str::from_utf8(&replay).unwrap()),
-            parse("{\"x\": 2, \"y\": 1}")
-        );
+        assert_eq!(replay_json(&replay), parse("{\"x\": 2, \"y\": 1}"));
     }
 
     #[test]
@@ -1853,7 +1823,7 @@ mod tests {
         let (member, _, replay) = applied_override(outcome);
         assert_eq!(member, "app");
         assert_eq!(
-            parse(std::str::from_utf8(&replay).unwrap()),
+            replay_json(&replay),
             parse("{\"k\": 2, \"u\": \"new\", \"n\": true}")
         );
     }
@@ -1881,7 +1851,7 @@ mod tests {
                     parse("{\"editor.fontSize\": 16}")
                 );
                 assert_eq!(
-                    parse(std::str::from_utf8(&replay_bytes).unwrap()),
+                    replay_json(&replay_bytes),
                     parse("{\"editor.fontSize\": 16, \"java.jdt.ls.java.home\": \"/hand\"}")
                 );
             }
@@ -1916,7 +1886,7 @@ mod tests {
             } => {
                 assert!(new_override_text.is_none(), "no override to write");
                 assert_eq!(
-                    parse(std::str::from_utf8(&replay_bytes).unwrap()),
+                    replay_json(&replay_bytes),
                     parse(
                         "{\"java.jdt.ls.java.home\": \"/hand\", \"java.import.gradle.java.home\": \"/hand\"}"
                     )
@@ -1968,15 +1938,8 @@ mod tests {
         override_text: Option<&str>,
         local_text: &str,
     ) -> Vec<u8> {
-        let base = parse(template_text);
-        let merged = match override_text {
-            Some(text) => {
-                merge::merge_structured(base, parse(text), ArrayPolicy::Union, "t").unwrap()
-            }
-            None => base,
-        };
-        let merged =
-            merge::merge_structured(merged, parse(local_text), ArrayPolicy::Union, "t").unwrap();
+        let merged = merge_layer(parse(template_text), override_text);
+        let merged = merge_layer(merged, Some(local_text));
         merge::serialize_doc(&merged, DocFormat::Json)
             .unwrap()
             .into_bytes()
@@ -2005,7 +1968,7 @@ mod tests {
         // Fold targets the main override; the local layer is untouched.
         assert_eq!(parse(&override_text), parse("{\"a\": 10, \"b\": 2}"));
         assert_eq!(
-            parse(std::str::from_utf8(&replay).unwrap()),
+            replay_json(&replay),
             parse("{\"a\": 10, \"b\": 3, \"c\": 9}")
         );
     }
@@ -2026,12 +1989,7 @@ mod tests {
             EffectiveStrategy::Structured(DocFormat::Json),
         )];
         let outcome = backpropagate(Path::new("out.json"), &last, current, &members).unwrap();
-        let (_, text, replay) = applied_override(outcome);
-        assert_eq!(parse(&text), parse("{}"));
-        assert_eq!(
-            parse(std::str::from_utf8(&replay).unwrap()),
-            parse("{\"k\": 3}")
-        );
+        assert_override_emptied(outcome, "{\"k\": 3}");
     }
 
     #[test]
@@ -2057,28 +2015,7 @@ mod tests {
     fn shared_local_scopes_to_its_contributor() {
         let rust = labels(&["rust"]);
         let dart = labels(&["dart"]);
-        let rust_last = parse("{\"x\": 1, \"lx\": 1}");
-        let dart_last = parse("{\"y\": 1}");
-        let combined = {
-            let contributions = [
-                merge::Contribution {
-                    template: "a",
-                    labels: &rust,
-                    value: rust_last,
-                },
-                merge::Contribution {
-                    template: "b",
-                    labels: &dart,
-                    value: dart_last,
-                },
-            ];
-            merge::serialize_doc(
-                &merge::combine_structured(&contributions).unwrap(),
-                DocFormat::Json,
-            )
-            .unwrap()
-            .into_bytes()
-        };
+        let combined = combined_pair(&rust, &dart, "{\"x\": 1, \"lx\": 1}", "{\"y\": 1}");
         let current = b"{\"lx\": 1, \"x\": 2, \"y\": 1}\n";
         let members = [
             local_member(
@@ -2100,14 +2037,7 @@ mod tests {
     #[test]
     fn append_three_layer_fold_recovers_middle() {
         let labels = labels(&[]);
-        let members = [local_member(
-            "banner",
-            &labels,
-            "T\n",
-            Some("O\n"),
-            Some("L\n"),
-            EffectiveStrategy::AppendBottom,
-        )];
+        let members = banner_three_layer(&labels);
         let last = b"T\n\nO\n\nL\n";
         let current = b"T\n\nO2\n\nL\n";
         let outcome = backpropagate(Path::new("out.txt"), last, current, &members).unwrap();
@@ -2119,14 +2049,7 @@ mod tests {
     #[test]
     fn append_local_region_edit_fails() {
         let labels = labels(&[]);
-        let members = [local_member(
-            "banner",
-            &labels,
-            "T\n",
-            Some("O\n"),
-            Some("L\n"),
-            EffectiveStrategy::AppendBottom,
-        )];
+        let members = banner_three_layer(&labels);
         let last = b"T\n\nO\n\nL\n";
         let err = backpropagate(Path::new("out.txt"), last, b"T\n\nO\n\nCHANGED\n", &members)
             .unwrap_err();
@@ -2155,10 +2078,20 @@ mod tests {
         let (member, text, replay) = applied_override(outcome);
         assert_eq!(member, "app");
         assert_eq!(parse(&text), parse("{\"k\": 2}"));
-        assert_eq!(
-            parse(std::str::from_utf8(&replay).unwrap()),
-            parse("{\"k\": 2, \"u\": 9}")
-        );
+        assert_eq!(replay_json(&replay), parse("{\"k\": 2, \"u\": 9}"));
+    }
+
+    /// The three-layer append fixture (template, override, local) both
+    /// banner tests build on.
+    fn banner_three_layer(label_set: &BTreeSet<String>) -> [MemberView<'_>; 1] {
+        [local_member(
+            "banner",
+            label_set,
+            "T\n",
+            Some("O\n"),
+            Some("L\n"),
+            EffectiveStrategy::AppendBottom,
+        )]
     }
 
     fn pattern(text: &str) -> IgnorePattern {

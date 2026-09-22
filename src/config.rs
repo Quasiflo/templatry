@@ -354,6 +354,7 @@ pub struct DefaultRules {
     pub exclude_labels: Option<Vec<String>>,
 }
 
+// jscpd:ignore-start
 /// One template file: paths, merge strategy, labels.
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -446,6 +447,7 @@ pub struct AbstractTemplate {
     #[serde(default)]
     pub backprop_ignore_values: Vec<String>,
 }
+// jscpd:ignore-end
 
 impl AbstractTemplate {
     /// Merge into a concrete template: concrete scalar fields win when set,
