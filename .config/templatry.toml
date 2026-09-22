@@ -1,3 +1,4 @@
 [source]
-path = "../configs"
-enable_labels = ["license", "rust", "toml"]
+github = "Quasiflo/configs"
+ref = "v0.1.0"
+enable_labels = ["github", "license", "rust", "toml"]
