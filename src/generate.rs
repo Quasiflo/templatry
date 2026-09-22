@@ -366,16 +366,19 @@ pub(crate) fn render_contents(
             }
             // Segments stay precedence-ordered (highest first for top,
             // lowest first for bottom); missing layers vanish with no
-            // stray separators.
+            // stray separators. Emptied layers vanish too: forward reads
+            // never produce them (whitespace-only files count as missing),
+            // but back-propagation replays a reverted override as `Some("")`
+            // and must reproduce the file exactly.
             let mut segments: Vec<&str> = Vec::with_capacity(3);
             if strategy == EffectiveStrategy::AppendTop {
-                segments.extend(local_text);
-                segments.extend(override_text);
+                segments.extend(local_text.filter(|text| !text.is_empty()));
+                segments.extend(override_text.filter(|text| !text.is_empty()));
                 segments.push(template_text);
             } else {
                 segments.push(template_text);
-                segments.extend(override_text);
-                segments.extend(local_text);
+                segments.extend(override_text.filter(|text| !text.is_empty()));
+                segments.extend(local_text.filter(|text| !text.is_empty()));
             }
             Ok(Rendered::Text(segments.join("\n")))
         }

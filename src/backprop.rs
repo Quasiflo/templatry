@@ -766,6 +766,7 @@ fn try_candidates(
                     candidate.override_path.map(Path::to_path_buf),
                     new_override_text,
                     restored,
+                    tentative,
                 ));
             }
             Err(reason) => {
@@ -789,7 +790,7 @@ fn try_candidates(
             ))
         }
         1 => {
-            let (name, _, new_override_text, replay_bytes) =
+            let (name, _, new_override_text, replay_bytes, _) =
                 passing.pop().expect("one passing candidate");
             Ok(BackpropOutcome::Applied {
                 member: name.to_string(),
@@ -800,16 +801,18 @@ fn try_candidates(
         _ => {
             // Collapse when every passing candidate agrees on every
             // observable outcome (see `collapsing`).
-            if collapsing(&passing) {
-                let (name, _, new_override_text, replay_bytes) =
-                    passing.into_iter().next().expect("passing is non-empty");
+            if let Some(winner) = collapsing(&passing) {
+                let (name, _, new_override_text, replay_bytes, _) = passing
+                    .into_iter()
+                    .nth(winner)
+                    .expect("collapsing returned a valid index");
                 return Ok(BackpropOutcome::Applied {
                     member: name.to_string(),
                     new_override_text,
                     replay_bytes,
                 });
             }
-            let mut names: Vec<&str> = passing.iter().map(|(name, _, _, _)| *name).collect();
+            let mut names: Vec<&str> = passing.iter().map(|(name, _, _, _, _)| *name).collect();
             names.sort();
             Err(crate::invalid(
                 dest,
@@ -826,33 +829,90 @@ fn try_candidates(
     }
 }
 
-/// One passing candidate: template name, override path, override text, replay bytes.
-type Passing<'a> = (&'a str, Option<PathBuf>, Option<String>, Vec<u8>);
+/// One passing candidate: template name, override path, override text,
+/// replay bytes, and the folded override value (for redundancy comparison).
+type Passing<'a> = (&'a str, Option<PathBuf>, Option<String>, Vec<u8>, Value);
 
-/// True when all passing candidates agree on every observable outcome.
+/// Index of the passing candidate to apply, when all of them agree.
 ///
-/// Outcomes are the replay bytes plus the set of override writes, where a
-/// `None` text means no write. Candidates that fold nothing therefore
-/// collapse regardless of paths; divergent writes stay ambiguous. A write to
-/// an unknown file can never collapse.
-fn collapsing(passing: &[Passing<'_>]) -> bool {
-    let [(_, _, _, first_replay), rest @ ..] = passing else {
-        return false;
+/// Agreement is replay bytes plus the override write-set, where a `None`
+/// text means no write: candidates that fold nothing collapse regardless
+/// of paths, and a single unanimous write applies. Several texts for one
+/// file still collapse when they render identically and one is a deep
+/// subset of every other — the extra pins are pipeline-redundant, so the
+/// minimum wins (reverting cleans the pin instead of re-pinning the
+/// template value). Anything else stays ambiguous, and a write to an
+/// unknown file can never collapse.
+fn collapsing(passing: &[Passing<'_>]) -> Option<usize> {
+    let [(_, _, _, first_replay, _), rest @ ..] = passing else {
+        return None;
     };
-    if rest.iter().any(|(_, _, _, replay)| replay != first_replay) {
-        return false;
+    if rest
+        .iter()
+        .any(|(_, _, _, replay, _)| replay != first_replay)
+    {
+        return None;
     }
-    let mut writes = std::collections::BTreeSet::new();
-    for (_, path, text, _) in passing {
+    // Distinct write texts (with their folded values) in first-seen order,
+    // tracking which files would change.
+    let mut paths = std::collections::BTreeSet::new();
+    let mut distinct: Vec<(&str, &Value)> = Vec::new();
+    for (_, path, text, _, tentative) in passing {
         match (path, text) {
             (Some(path), Some(text)) => {
-                writes.insert((path.clone(), text.clone()));
+                paths.insert(path.clone());
+                if !distinct.iter().any(|(known, _)| *known == text) {
+                    distinct.push((text, tentative));
+                }
             }
             (_, None) => {}
-            (None, Some(_)) => return false,
+            (None, Some(_)) => return None,
         }
     }
-    writes.len() <= 1
+    if paths.len() > 1 {
+        return None;
+    }
+    if distinct.len() <= 1 {
+        return Some(0);
+    }
+    // One file, several rendering-identical texts: collapse to the unique
+    // subset-minimum when there is one.
+    let minimum = distinct
+        .iter()
+        .position(|(_, small)| distinct.iter().all(|(_, large)| value_subset(small, large)))?;
+    let text = distinct[minimum].0;
+    passing
+        .iter()
+        .position(|(_, _, candidate_text, _, _)| candidate_text.as_deref() == Some(text))
+}
+
+/// True when every pin in `small` is present with an equal-or-containing
+/// value in `large`: `small` writes nothing `large` does not already write.
+/// Objects recurse; arrays and scalars compare wholesale (arrays never
+/// merge, so partial overlap is meaningless).
+fn value_subset(small: &Value, large: &Value) -> bool {
+    match (small, large) {
+        (Value::Object(small_map), Value::Object(large_map)) => {
+            small_map
+                .iter()
+                .all(|(key, small_value)| match large_map.get(key) {
+                    Some(large_value) => value_subset(small_value, large_value),
+                    None => false,
+                })
+        }
+        _ => small == large,
+    }
+}
+
+/// True when two members write the same override file (both resolved).
+///
+/// Members without a known path never count as sharing: each folds into
+/// its own file, so only the candidate replays tentatively.
+fn same_override_file(left: Option<&Path>, right: Option<&Path>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => left == right,
+        _ => false,
+    }
 }
 
 /// What the safety replay compares against and recovers from.
@@ -918,8 +978,15 @@ fn safety_replay(
         // A fold that changed nothing replays the original override state:
         // serializing a Null tentative would pass explicit JSON `null`,
         // which replaces the whole document, while a missing override
-        // skips the merge entirely.
-        let text = if member.name == candidate.name {
+        // skips the merge entirely. Members sharing the candidate's
+        // override file replay with the tentative too: the fold rewrites
+        // that one file for all of them, so replaying the others against
+        // their stale on-disk text would reject every candidate (notably
+        // when removing the last pin — each replay would still contain it
+        // via the other members).
+        let text = if member.name == candidate.name
+            || same_override_file(member.override_path, candidate.override_path)
+        {
             if tentative.is_null() && member.override_text.is_none() {
                 None
             } else {
@@ -1334,6 +1401,137 @@ mod tests {
             parse(std::str::from_utf8(&replay).unwrap()),
             parse("{\"k\": 1}")
         );
+    }
+
+    #[test]
+    fn shared_override_revert_empties_the_file() {
+        // Two members share one override file holding a single pin. Removing
+        // the pin must empty the file: every candidate replays the tentative
+        // for all sharers, so nobody replays against the stale on-disk pin.
+        let shared = Path::new("shared.json");
+        let x = labels(&["x"]);
+        let y = labels(&["y"]);
+        let last = last_of("{\"k\": 1}", Some("{\"fresh\": true}"));
+        let current = b"{\"k\": 1}\n";
+        let members = [
+            viewed_member(
+                "a",
+                &x,
+                Some(shared),
+                "{\"k\": 1}",
+                Some("{\"fresh\": true}"),
+                None,
+                EffectiveStrategy::Structured(DocFormat::Json),
+            ),
+            viewed_member(
+                "b",
+                &y,
+                Some(shared),
+                "{\"k\": 1}",
+                Some("{\"fresh\": true}"),
+                None,
+                EffectiveStrategy::Structured(DocFormat::Json),
+            ),
+        ];
+        let outcome = backpropagate(Path::new("out.json"), &last, current, &members).unwrap();
+        let (_, text, replay) = applied_override(outcome);
+        assert_eq!(parse(&text), parse("{}"));
+        assert_eq!(
+            parse(std::str::from_utf8(&replay).unwrap()),
+            parse("{\"k\": 1}")
+        );
+    }
+
+    #[test]
+    fn shared_override_revert_prefers_pin_removal() {
+        // The reverted key lives in one member's template only. Reverting
+        // folds divergently — removal where it is a template value, an
+        // explicit pin elsewhere — but every write renders identically and
+        // the removal is a deep subset of the pins, so it collapses to the
+        // removal instead of erroring as ambiguous.
+        let shared = Path::new("shared.json");
+        let common_labels = labels(&["common"]);
+        let doc_labels = labels(&["documentation"]);
+        let toml_labels = labels(&["toml"]);
+        let last = b"{\"doc\": 1, \"k\": 1, \"rumdl.lint.run\": \"a\", \"toml\": 1}\n";
+        let current = b"{\"doc\": 1, \"k\": 1, \"rumdl.lint.run\": \"onSave\", \"toml\": 1}\n";
+        let members = [
+            viewed_member(
+                "common",
+                &common_labels,
+                Some(shared),
+                "{\"k\": 1, \"rumdl.lint.run\": \"onSave\"}",
+                Some("{\"rumdl.lint.run\": \"a\"}"),
+                None,
+                EffectiveStrategy::Structured(DocFormat::Json),
+            ),
+            viewed_member(
+                "documentation",
+                &doc_labels,
+                Some(shared),
+                "{\"doc\": 1}",
+                Some("{\"rumdl.lint.run\": \"a\"}"),
+                None,
+                EffectiveStrategy::Structured(DocFormat::Json),
+            ),
+            viewed_member(
+                "toml",
+                &toml_labels,
+                Some(shared),
+                "{\"toml\": 1}",
+                Some("{\"rumdl.lint.run\": \"a\"}"),
+                None,
+                EffectiveStrategy::Structured(DocFormat::Json),
+            ),
+        ];
+        let outcome = backpropagate(Path::new("out.json"), last, current, &members).unwrap();
+        let (member, text, replay) = applied_override(outcome);
+        assert_eq!(member, "common");
+        assert_eq!(parse(&text), parse("{}"));
+        assert_eq!(
+            parse(std::str::from_utf8(&replay).unwrap()),
+            parse("{\"doc\": 1, \"k\": 1, \"rumdl.lint.run\": \"onSave\", \"toml\": 1}")
+        );
+    }
+
+    #[test]
+    fn append_bottom_revert_to_empty_round_trips() {
+        // Reverting the only override content folds to an empty layer, which
+        // renders as absent (no stray separator) and reproduces the file.
+        let labels = labels(&[]);
+        let members = [view(
+            "banner",
+            &labels,
+            "TEMPLATE\n",
+            Some("MYLINE=1\n"),
+            EffectiveStrategy::AppendBottom,
+        )];
+        let last = b"TEMPLATE\n\nMYLINE=1\n";
+        let current = b"TEMPLATE\n";
+        let outcome = backpropagate(Path::new("out.txt"), last, current, &members).unwrap();
+        let (member, override_text, replay) = applied(outcome);
+        assert_eq!(member, "banner");
+        assert_eq!(override_text.as_deref(), Some(""));
+        assert_eq!(replay, current);
+    }
+
+    #[test]
+    fn append_top_revert_to_empty_round_trips() {
+        let labels = labels(&[]);
+        let members = [view(
+            "banner",
+            &labels,
+            "TEMPLATE\n",
+            Some("O=1\n"),
+            EffectiveStrategy::AppendTop,
+        )];
+        let last = b"O=1\n\nTEMPLATE\n";
+        let current = b"TEMPLATE\n";
+        let outcome = backpropagate(Path::new("out.txt"), last, current, &members).unwrap();
+        let (member, override_text, replay) = applied(outcome);
+        assert_eq!(member, "banner");
+        assert_eq!(override_text.as_deref(), Some(""));
+        assert_eq!(replay, current);
     }
 
     #[test]
