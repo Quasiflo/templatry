@@ -1,12 +1,13 @@
 {
-    // Recommended extensions for working in this repo (VS Code prompts to install these).
-    "recommendations": [
-        "rust-lang.rust-analyzer",
-        "rvben.rumdl",
-        "hverlin.mise-vscode",
-        "pkl.pkl-vscode",
-        "redhat.vscode-yaml",
-        "tombi-toml.tombi",
-        "github.vscode-github-actions"
-    ]
+  "recommendations": [
+    "aaron-bond.better-comments",
+    "hverlin.mise-vscode",
+    "madcatpx.explorer-exclude-manager",
+    "task.vscode-task",
+    "bierner.github-markdown-preview",
+    "rvben.rumdl",
+    "vstirbu.vscode-mermaid-preview",
+    "rust-lang.rust-analyzer",
+    "tombi-toml.tombi"
+  ]
 }

@@ -1,0 +1,3 @@
+[source]
+path = "../configs"
+enable_labels = ["rust", "toml"]

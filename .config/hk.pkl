@@ -1,13 +1,37 @@
 // * HK - Git Hook Configuration
 // This file ensures you are committing properly linted and formatted files which will pass ci
 
-amends "package://github.com/jdx/hk/releases/download/v2.0.0/hk@2.0.0#/Config.pkl"
-import "package://github.com/jdx/hk/releases/download/v2.0.0/hk@2.0.0#/Builtins.pkl"
+amends "package://github.com/jdx/hk/releases/download/v1.58.1/hk@1.58.1#/Config.pkl"
 
-steps {
-  ["rumdl"] = Builtins.rumdl
-  ["zizmor"] = Builtins.zizmor
-  ["cargo clippy"] = Builtins.cargo_clippy
-  ["cargo format"] = Builtins.cargo_fmt
-  ["cargo deny"] = Builtins.cargo_deny
+// Glob all contribution files
+local generated_steps = import*("generated/hk-*.pkl")
+
+// Helper: collect every generated step for a given category
+local function collect(category: String) = new Group {
+  steps {
+    for (_, contrib in generated_steps) {
+      ...contrib.getPropertyOrNull(category) ?? new Mapping {}
+    }
+  }
+}
+
+local _steps = new Mapping {
+  ["format"] = collect("format")
+  ["lint"] = collect("lint")
+  ["common"] = collect("common")
+}
+
+hooks { // TODO remove and migrate to new structure once upgraded to HK v2
+  ["pre-commit"] {
+    steps = _steps
+    fix = true
+    stash = true
+  }
+  ["check"] {
+    steps = _steps
+  }
+  ["fix"] {
+    steps = _steps
+    fix = true
+  }
 }
