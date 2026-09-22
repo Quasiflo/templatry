@@ -1,7 +1,5 @@
 //! Templatry library: template retrieval, merging, generation, watching, and validation.
 //!
-//! Module map (see `ROADMAP.md` for the full plan):
-//!
 //! - [`config`]: project and source configuration schemas (Milestone 1).
 //! - [`source`]: template source retrieval, caching, and integrity (Milestone 2).
 //! - [`merge`]: structured and text merge strategies (Milestone 3).

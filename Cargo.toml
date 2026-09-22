@@ -4,7 +4,12 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.89"
 description = "Write Once, Use Everywhere! Template & distribute configuration files across repositories."
-license = "MIT"
+readme = "README.md"
+repository = "https://github.com/Quasiflo/templatry"
+license = "Apache-2.0"
+keywords = ["cli", "config", "configuration", "template", "terminal"]
+categories = ["command-line-utilities", "config"]
+exclude = [".config/", ".github/", ".vscode/", "AGENTS.md", "docs/", "scripts/"]
 
 [lib]
 name = "templatry"
