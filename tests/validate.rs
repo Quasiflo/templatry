@@ -30,6 +30,7 @@ fn all_validate_fixtures_are_known() {
     assert_eq!(
         names,
         [
+            "project-both-invalid-source",
             "project-both-present",
             "project-empty",
             "project-valid-local",
@@ -62,11 +63,22 @@ async fn valid_local_project_passes() {
 }
 
 #[tokio::test]
-async fn both_configs_present_fails() {
-    let err = validate::run_in(&fixture("project-both-present"), None)
+async fn both_configs_present_validates_both() {
+    // A template source that is also a templatry project: both halves must
+    // pass for the repository to validate.
+    validate::run_in(&fixture("project-both-present"), None)
         .await
-        .expect_err("ambiguity");
-    assert!(err.to_string().contains("both"), "{err:?}");
+        .expect("dual-role repository validates");
+}
+
+#[tokio::test]
+async fn both_configs_present_fails_on_either_half() {
+    // The project half is valid here, so the broken source half must still
+    // fail the run (neither half is skipped).
+    let err = validate::run_in(&fixture("project-both-invalid-source"), None)
+        .await
+        .expect_err("broken source half");
+    assert!(err.to_string().contains("missing.json"), "{err:?}");
 }
 
 #[tokio::test]

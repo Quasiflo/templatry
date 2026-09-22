@@ -1,8 +1,11 @@
 //! Project and source validation diagnostics (Milestone 1).
 //!
-//! `templatry validate` auto-detects source versus project context, resolves
+//! `templatry validate` auto-detects project versus source context, resolves
 //! the source (fetching remote kinds via [`crate::source::resolve`]), and
-//! reports file/table/key diagnostics with one suggested fix each.
+//! reports file/table/key diagnostics with one suggested fix each. A
+//! repository holding both configs is both roles at once (a template source
+//! that manages its own files with templatry): the project validates first,
+//! then the source.
 
 use std::path::Path;
 
@@ -33,12 +36,12 @@ pub async fn run_in(dir: &Path, config: Option<&Path>) -> crate::Result<()> {
     let project = dir.join(PROJECT_CONFIG_PATH);
     let source = dir.join(SOURCE_CONFIG_FILENAME);
     match (project.exists(), source.exists()) {
-        (true, true) => Err(crate::invalid(
-            dir,
-            format!(
-                "both `{PROJECT_CONFIG_PATH}` and `{SOURCE_CONFIG_FILENAME}` are present: keep exactly one (project repos hold the former, template repos the latter)"
-            ),
-        )),
+        // Dual-role repository: a template source that is also a templatry
+        // project. Both halves validate; the first failure wins.
+        (true, true) => {
+            validate_project_file(&project).await?;
+            validate_source_file(&source)
+        }
         (true, false) => validate_project_file(&project).await,
         (false, true) => validate_source_file(&source),
         (false, false) => Err(crate::invalid(
