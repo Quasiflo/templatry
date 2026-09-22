@@ -117,7 +117,7 @@ pub(crate) async fn resolve_in(
     }
     tracing::info!(source_id = %source_id, kind = %kind, "fetching template source");
     let resolved_sha = fetch_to_entry(kind, source, &entry).await?;
-    write_sidecar(&entry, resolved_sha)?;
+    write_sidecar(&entry, source, kind, resolved_sha)?;
     let root_dir = join_root(&entry, source.root.as_deref());
     ensure_source_file(&root_dir, source.root.as_deref())?;
     Ok(ResolvedSource {
@@ -211,6 +211,56 @@ struct EntryMeta {
     last_used_unix: u64,
     #[serde(default)]
     resolved_sha: Option<String>,
+    /// What was fetched (absent on entries written before provenance).
+    #[serde(default)]
+    source: Option<EntrySource>,
+}
+
+/// Where a cache entry came from, for `cache list` display.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct EntrySource {
+    /// Source kind tag (`github`, `url`, or `git`; local sources never cache).
+    kind: String,
+    /// Canonical location (org/repo, URL, or git remote).
+    location: String,
+    /// Release tag or commit SHA (github, git).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    r#ref: String,
+    /// Source-root subdirectory holding `templatry.source.toml`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    root: String,
+    /// Release asset glob (github only).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    asset: String,
+}
+
+impl EntrySource {
+    /// Canonical provenance, normalized like the cache key.
+    fn describe(source: &crate::config::SourceRef, kind: SourceKind) -> Self {
+        let tag = match kind {
+            SourceKind::LocalDir => "path",
+            SourceKind::GitHubRelease => "github",
+            SourceKind::UrlArchive => "url",
+            SourceKind::GitCheckout => "git",
+        };
+        let location = match kind {
+            SourceKind::LocalDir => source.path.as_deref(),
+            SourceKind::GitHubRelease => source.github.as_deref(),
+            SourceKind::UrlArchive => source.url.as_deref(),
+            SourceKind::GitCheckout => source.git.as_deref(),
+        };
+        Self {
+            kind: tag.to_string(),
+            location: location
+                .unwrap_or_default()
+                .trim()
+                .trim_end_matches('/')
+                .to_string(),
+            r#ref: source.r#ref.as_deref().unwrap_or_default().to_string(),
+            root: normalize_root(source.root.as_deref()).to_string(),
+            asset: source.asset.as_deref().unwrap_or_default().to_string(),
+        }
+    }
 }
 
 fn now_unix() -> u64 {
@@ -234,17 +284,24 @@ fn refresh_sidecar(entry: &Path) -> crate::Result<()> {
     let mut meta = read_sidecar(entry).unwrap_or(EntryMeta {
         last_used_unix: 0,
         resolved_sha: None,
+        source: None,
     });
     meta.last_used_unix = now_unix();
     write_sidecar_inner(entry, &meta)
 }
 
-fn write_sidecar(entry: &Path, resolved_sha: Option<String>) -> crate::Result<()> {
+fn write_sidecar(
+    entry: &Path,
+    source: &crate::config::SourceRef,
+    kind: SourceKind,
+    resolved_sha: Option<String>,
+) -> crate::Result<()> {
     write_sidecar_inner(
         entry,
         &EntryMeta {
             last_used_unix: now_unix(),
             resolved_sha,
+            source: Some(EntrySource::describe(source, kind)),
         },
     )
 }
@@ -298,6 +355,101 @@ pub(crate) fn cache_clear_in(cache_root: &Path) -> crate::Result<()> {
     std::fs::remove_dir_all(cache_root)
         .map_err(|err| crate::invalid(cache_root, format!("cannot clear cache: {err}")))?;
     Ok(())
+}
+
+/// One cached template source for `cache list`.
+///
+/// Provenance (`kind` and below) is `None` on entries written before it was
+/// recorded; only the entry key and size are always known.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CachedSource {
+    /// Full hex cache key (the entry directory name).
+    pub source_id: String,
+    /// Source kind tag (`github`, `url`, or `git`).
+    pub kind: Option<String>,
+    /// Canonical location (org/repo, URL, or git remote).
+    pub location: Option<String>,
+    /// Release tag or commit SHA (github, git).
+    pub r#ref: Option<String>,
+    /// Source-root subdirectory holding `templatry.source.toml`.
+    pub root: Option<String>,
+    /// Release asset glob (github only).
+    pub asset: Option<String>,
+    /// Last-use unix timestamp; `None` when the sidecar is missing.
+    pub last_used_unix: Option<u64>,
+    /// Resolved git SHA (git checkouts only).
+    pub resolved_sha: Option<String>,
+    /// Recursive entry size in bytes (best effort).
+    pub size_bytes: u64,
+    /// Absolute path to the cache entry directory.
+    pub path: PathBuf,
+}
+
+/// List cached template sources, most recently used first.
+///
+/// Best effort throughout: a missing cache root lists as empty, and entries
+/// with unreadable sidecars still appear with unknown provenance.
+pub fn cache_list() -> Vec<CachedSource> {
+    cache_list_in(&cache_root())
+}
+
+/// [`cache_list`] with an explicit cache root (the test seam).
+pub(crate) fn cache_list_in(cache_root: &Path) -> Vec<CachedSource> {
+    let Ok(entries) = std::fs::read_dir(cache_root) else {
+        return Vec::new();
+    };
+    let mut listed = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(source_id) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let meta = read_sidecar(&path);
+        let provenance = meta.as_ref().and_then(|meta| meta.source.as_ref());
+        let present = |value: &str| (!value.is_empty()).then(|| value.to_string());
+        listed.push(CachedSource {
+            source_id: source_id.to_string(),
+            kind: provenance.map(|provenance| provenance.kind.clone()),
+            location: provenance.map(|provenance| provenance.location.clone()),
+            r#ref: provenance.and_then(|provenance| present(&provenance.r#ref)),
+            root: provenance.and_then(|provenance| present(&provenance.root)),
+            asset: provenance.and_then(|provenance| present(&provenance.asset)),
+            last_used_unix: meta.as_ref().map(|meta| meta.last_used_unix),
+            resolved_sha: meta.as_ref().and_then(|meta| meta.resolved_sha.clone()),
+            size_bytes: entry_size(&path),
+            path: path.clone(),
+        });
+    }
+    listed.sort_by(|left, right| {
+        (right.last_used_unix, &left.source_id).cmp(&(left.last_used_unix, &right.source_id))
+    });
+    listed
+}
+
+/// Recursive directory size in bytes (symlinks counted, never followed).
+fn entry_size(path: &Path) -> u64 {
+    let mut total = 0;
+    let mut stack = vec![path.to_path_buf()];
+    while let Some(current) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&current) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(meta) = std::fs::symlink_metadata(&path) else {
+                continue;
+            };
+            if meta.is_dir() && !meta.is_symlink() {
+                stack.push(path);
+            } else {
+                total += meta.len();
+            }
+        }
+    }
+    total
 }
 
 // ---- Auth -------------------------------------------------------------------
@@ -1033,6 +1185,123 @@ mod tests {
     }
 
     #[test]
+    fn entry_provenance_describes_sources() {
+        let github = parse_project_ref("github = \"o/r\"\nref = \"v1\"\nasset = \"c_*.zip\"\n");
+        let described = EntrySource::describe(&github, github.kind().unwrap());
+        assert_eq!(described.kind, "github");
+        assert_eq!(described.location, "o/r");
+        assert_eq!(described.r#ref, "v1");
+        assert_eq!(described.asset, "c_*.zip");
+        assert_eq!(described.root, "");
+
+        // Omitted asset normalizes to empty, like the cache key.
+        let tarball = parse_project_ref("github = \"o/r/\"\nref = \"v1\"\n");
+        let described = EntrySource::describe(&tarball, tarball.kind().unwrap());
+        assert_eq!(described.location, "o/r");
+        assert_eq!(described.asset, "");
+
+        let url = parse_project_ref("url = \"https://example.com/t.tar.gz\"\n");
+        let described = EntrySource::describe(&url, url.kind().unwrap());
+        assert_eq!(described.kind, "url");
+        assert_eq!(described.location, "https://example.com/t.tar.gz");
+        assert_eq!(described.r#ref, "");
+
+        let git = parse_project_ref(
+            "git = \"git@example.com:o/r.git\"\nref = \"0123456789abcdef0123456789abcdef01234567\"\nroot = \".\"\n",
+        );
+        let described = EntrySource::describe(&git, git.kind().unwrap());
+        assert_eq!(described.kind, "git");
+        assert_eq!(described.r#ref, "0123456789abcdef0123456789abcdef01234567");
+        assert_eq!(described.root, "", "`.` root normalizes away");
+    }
+
+    #[test]
+    fn sidecar_roundtrips_provenance() {
+        let dir = temp_cache();
+        let github = parse_project_ref("github = \"o/r\"\nref = \"v1\"\n");
+        write_sidecar(
+            dir.path(),
+            &github,
+            github.kind().unwrap(),
+            Some("abc".to_string()),
+        )
+        .expect("write sidecar");
+        let meta = read_sidecar(dir.path()).expect("sidecar round-trips");
+        assert_eq!(meta.resolved_sha.as_deref(), Some("abc"));
+        let source = meta.source.expect("provenance recorded");
+        assert_eq!(source.kind, "github");
+        assert_eq!(source.location, "o/r");
+    }
+
+    #[test]
+    fn cache_list_reports_entries_newest_first() {
+        let root = temp_cache();
+        let github = parse_project_ref("github = \"o/r\"\nref = \"v1\"\n");
+        let provenance = Some(EntrySource::describe(&github, github.kind().unwrap()));
+
+        // Fresh entry with provenance plus sized content.
+        let fresh = root.path().join("ff");
+        std::fs::create_dir_all(&fresh).expect("mkdirs");
+        std::fs::write(fresh.join("a.bin"), vec![0u8; 100]).expect("write");
+        std::fs::write(fresh.join("b.bin"), vec![0u8; 24]).expect("write");
+        write_sidecar_inner(
+            &fresh,
+            &EntryMeta {
+                last_used_unix: 200,
+                resolved_sha: None,
+                source: provenance,
+            },
+        )
+        .expect("sidecar");
+
+        // Legacy entry: sidecar without provenance sorts by its timestamp.
+        let legacy = root.path().join("aa");
+        std::fs::create_dir_all(&legacy).expect("mkdirs");
+        write_sidecar_inner(
+            &legacy,
+            &EntryMeta {
+                last_used_unix: 300,
+                resolved_sha: None,
+                source: None,
+            },
+        )
+        .expect("legacy sidecar");
+
+        // Entry without any sidecar still lists, provenance unknown, last.
+        let bare = root.path().join("mm");
+        std::fs::create_dir_all(&bare).expect("mkdirs");
+        std::fs::write(bare.join("x.txt"), "hi").expect("write");
+
+        // Stray files at the root are not entries.
+        std::fs::write(root.path().join("stray.txt"), "x").expect("write");
+
+        let listed = cache_list_in(root.path());
+        let [legacy_entry, fresh_entry, bare_entry] = listed.try_into().expect("exactly 3 entries");
+        assert_eq!(legacy_entry.source_id, "aa");
+        assert_eq!(fresh_entry.source_id, "ff");
+        assert_eq!(bare_entry.source_id, "mm");
+
+        assert_eq!(legacy_entry.kind, None);
+        assert_eq!(legacy_entry.last_used_unix, Some(300));
+
+        assert_eq!(fresh_entry.kind.as_deref(), Some("github"));
+        assert_eq!(fresh_entry.location.as_deref(), Some("o/r"));
+        assert_eq!(fresh_entry.r#ref.as_deref(), Some("v1"));
+        let sidecar_len = std::fs::metadata(fresh.join(ENTRY_SIDECAR_FILENAME))
+            .expect("stat")
+            .len();
+        assert_eq!(fresh_entry.size_bytes, 100 + 24 + sidecar_len);
+
+        assert_eq!(bare_entry.kind, None);
+        assert_eq!(bare_entry.last_used_unix, None);
+        assert_eq!(bare_entry.size_bytes, 2);
+
+        assert_eq!(legacy_entry.path, legacy);
+        assert_eq!(fresh_entry.path, fresh);
+        assert_eq!(bare_entry.path, bare);
+    }
+
+    #[test]
     fn archive_format_detection() {
         assert_eq!(ArchiveKind::detect("a.tar.gz").unwrap(), ArchiveKind::TarGz);
         assert_eq!(ArchiveKind::detect("a.tgz").unwrap(), ArchiveKind::TarGz);
@@ -1124,6 +1393,7 @@ mod tests {
         let meta = EntryMeta {
             last_used_unix,
             resolved_sha: None,
+            source: None,
         };
         std::fs::create_dir_all(entry).unwrap();
         std::fs::write(

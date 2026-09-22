@@ -68,6 +68,8 @@ enum Commands {
 enum CacheCommands {
     /// Flush the entire cache; the next run re-pulls all sources.
     Clear,
+    /// List cached template sources, most recently used first.
+    List,
 }
 
 #[tokio::main]
@@ -115,6 +117,118 @@ async fn run(cli: Cli) -> miette::Result<()> {
             templatry::source::cache_clear()?;
             Ok(())
         }
+        Some(Commands::Cache {
+            command: CacheCommands::List,
+        }) => {
+            reject_bare_watch_flag(cli.watch)?;
+            print_cache_list(&templatry::source::cache_list());
+            Ok(())
+        }
+    }
+}
+
+/// Print cached template sources as a table, most recently used first.
+fn print_cache_list(entries: &[templatry::source::CachedSource]) {
+    if entries.is_empty() {
+        println!("template source cache is empty");
+        return;
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let rows: Vec<[String; 7]> = entries
+        .iter()
+        .map(|entry| {
+            let mut modifiers = Vec::new();
+            if let Some(root) = entry.root.as_deref().filter(|root| !root.is_empty()) {
+                modifiers.push(format!("root {root}"));
+            }
+            if let Some(asset) = entry.asset.as_deref().filter(|asset| !asset.is_empty()) {
+                modifiers.push(format!("asset {asset}"));
+            }
+            let source = match entry.location.clone() {
+                Some(location) if !modifiers.is_empty() => {
+                    format!("{} [{}]", location, modifiers.join(", "))
+                }
+                Some(location) => location,
+                None => "(unknown)".to_string(),
+            };
+            [
+                entry.source_id.chars().take(12).collect(),
+                entry.kind.clone().unwrap_or_else(|| "-".to_string()),
+                source,
+                entry.r#ref.clone().unwrap_or_else(|| "-".to_string()),
+                format_size(entry.size_bytes),
+                format_age(now, entry.last_used_unix),
+                entry.path.display().to_string(),
+            ]
+        })
+        .collect();
+    let headers = ["ID", "KIND", "SOURCE", "REF", "SIZE", "LAST USED", "PATH"];
+    let mut widths = [0; 7];
+    for (index, header) in headers.iter().enumerate() {
+        widths[index] = header.len();
+    }
+    for row in &rows {
+        for (index, cell) in row.iter().enumerate() {
+            widths[index] = widths[index].max(cell.len());
+        }
+    }
+    let print_row = |cells: &[String; 7]| {
+        println!(
+            "{:<id$}  {:<kind$}  {:<source$}  {:<ref$}  {:>size$}  {:<age$}  {}",
+            cells[0],
+            cells[1],
+            cells[2],
+            cells[3],
+            cells[4],
+            cells[5],
+            cells[6],
+            id = widths[0],
+            kind = widths[1],
+            source = widths[2],
+            r#ref = widths[3],
+            size = widths[4],
+            age = widths[5],
+        );
+    };
+    print_row(&headers.map(str::to_string));
+    for row in &rows {
+        print_row(row);
+    }
+}
+
+/// Bytes as `512 B`, `1.2 KB`, `3.4 MB`.
+fn format_size(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut size = bytes as f64;
+    let mut unit = 0;
+    while size >= 1024.0 && unit + 1 < UNITS.len() {
+        size /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{size:.1} {}", UNITS[unit])
+    }
+}
+
+/// Unix timestamp as `45s ago`, `3m ago`, `2h ago`, `5d ago` (`-` when unknown).
+fn format_age(now: u64, then: Option<u64>) -> String {
+    let Some(then) = then else {
+        return "-".to_string();
+    };
+    let age = now.saturating_sub(then);
+    if age < 60 {
+        format!("{age}s ago")
+    } else if age < 3_600 {
+        format!("{}m ago", age / 60)
+    } else if age < 86_400 {
+        format!("{}h ago", age / 3_600)
+    } else {
+        format!("{}d ago", age / 86_400)
     }
 }
 
