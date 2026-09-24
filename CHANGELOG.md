@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/Quasiflo/templatry/compare/v0.1.0...v0.2.0) (2026-09-24)
+
+
+### Features
+
+* --no-color flag & env support ([8e2f915](https://github.com/Quasiflo/templatry/commit/8e2f9153b83cdcbc49d25970686d2e43dfef7cb6))
+
 ## 0.1.0 (2026-09-22)
 
 
