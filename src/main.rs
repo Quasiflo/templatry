@@ -3,9 +3,10 @@
 //! Argument parsing, logging setup, and exit codes live here; every verb
 //! delegates to a library entry point so behavior stays unit-testable.
 
+use std::ffi::OsStr;
 use std::path::PathBuf;
 
-use clap::{ArgAction, Parser, Subcommand};
+use clap::{ArgAction, ColorChoice, CommandFactory, FromArgMatches, Parser, Subcommand};
 use tracing::level_filters::LevelFilter;
 
 #[derive(Debug, Parser)]
@@ -22,6 +23,10 @@ struct Cli {
     /// Silence all non-error output.
     #[arg(short, long, global = true, conflicts_with = "verbose")]
     quiet: bool,
+
+    /// Disable colored output (also honors the `NO_COLOR` environment variable).
+    #[arg(long, global = true)]
+    no_color: bool,
 
     /// Alias for `generate --watch`; only valid without a subcommand.
     #[arg(long)]
@@ -74,9 +79,35 @@ enum CacheCommands {
 
 #[tokio::main]
 async fn main() -> miette::Result<()> {
-    let cli = Cli::parse();
-    init_logging(cli.verbose, cli.quiet);
+    let cli = parse_cli();
+    let color = colors_enabled(cli.no_color);
+    init_logging(cli.verbose, cli.quiet, color);
+    init_error_reports(color);
     run(cli).await
+}
+
+/// Parse CLI args, forcing clap's own color output off when `--no-color` is
+/// present or `NO_COLOR` is set, so parse errors and `--help` honor it too.
+fn parse_cli() -> Cli {
+    let color = if colors_enabled(false) && !args_contain_no_color(std::env::args_os()) {
+        ColorChoice::Auto
+    } else {
+        ColorChoice::Never
+    };
+    let matches = Cli::command().color(color).get_matches();
+    Cli::from_arg_matches(&matches).unwrap_or_else(|err| err.exit())
+}
+
+/// Whether colored output is enabled: `--no-color` or a present `NO_COLOR`
+/// (any value, even empty, per <https://no-color.org>) disables it.
+fn colors_enabled(no_color: bool) -> bool {
+    !no_color && std::env::var_os("NO_COLOR").is_none()
+}
+
+/// True when the raw process args contain `--no-color` (pre-parse scan for
+/// clap's own output; the parsed flag governs everything else).
+fn args_contain_no_color(args: impl IntoIterator<Item = impl AsRef<OsStr>>) -> bool {
+    args.into_iter().any(|arg| arg.as_ref() == "--no-color")
 }
 
 async fn run(cli: Cli) -> miette::Result<()> {
@@ -255,7 +286,10 @@ fn reject_bare_watch_flag(watch: bool) -> miette::Result<()> {
 }
 
 /// `tracing` subscriber: flag-derived level by default, `RUST_LOG` overrides.
-fn init_logging(verbose: u8, quiet: bool) {
+///
+/// ANSI codes stay exactly as before when colors are enabled; they are forced
+/// off when `--no-color` or `NO_COLOR` disables them.
+fn init_logging(verbose: u8, quiet: bool, color: bool) {
     let level = if quiet {
         LevelFilter::OFF
     } else {
@@ -268,8 +302,68 @@ fn init_logging(verbose: u8, quiet: bool) {
     let filter = tracing_subscriber::EnvFilter::builder()
         .with_default_directive(level.into())
         .from_env_lossy();
-    tracing_subscriber::fmt()
+    let subscriber = tracing_subscriber::fmt()
         .with_env_filter(filter)
-        .with_target(false)
-        .init();
+        .with_target(false);
+    if color {
+        subscriber.init();
+    } else {
+        subscriber.with_ansi(false).init();
+    }
+}
+
+/// Install a monochrome miette report handler when colors are disabled.
+///
+/// The `unicode_nocolor` theme keeps the graphical layout (spans, boxes)
+/// while dropping ANSI colors; the default handler stays untouched otherwise.
+fn init_error_reports(color: bool) {
+    if color {
+        return;
+    }
+    let _ = miette::set_hook(Box::new(|_| {
+        Box::new(miette::GraphicalReportHandler::new_themed(
+            miette::GraphicalTheme::unicode_nocolor(),
+        ))
+    }));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Flag-or-env color resolution (one test: `NO_COLOR` is process-global).
+    #[test]
+    fn no_color_flag_or_env_disables_color() {
+        let saved = std::env::var_os("NO_COLOR");
+        unsafe { std::env::remove_var("NO_COLOR") };
+        assert!(colors_enabled(false));
+        assert!(!colors_enabled(true));
+
+        unsafe { std::env::set_var("NO_COLOR", "") };
+        assert!(
+            !colors_enabled(false),
+            "empty NO_COLOR still disables color"
+        );
+        unsafe { std::env::set_var("NO_COLOR", "1") };
+        assert!(!colors_enabled(false));
+        assert!(!colors_enabled(true));
+
+        match saved {
+            Some(value) => unsafe { std::env::set_var("NO_COLOR", value) },
+            None => unsafe { std::env::remove_var("NO_COLOR") },
+        }
+    }
+
+    #[test]
+    fn raw_args_scan_finds_no_color_anywhere() {
+        assert!(!args_contain_no_color(["templatry", "generate"]));
+        assert!(args_contain_no_color(["templatry", "--no-color"]));
+        assert!(args_contain_no_color([
+            "templatry",
+            "cache",
+            "list",
+            "--no-color"
+        ]));
+        assert!(!args_contain_no_color(["templatry", "--no-colors"]));
+    }
 }

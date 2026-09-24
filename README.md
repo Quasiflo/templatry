@@ -56,7 +56,7 @@ templatry --watch               # alias for generate --watch
 - `generate` writes every enabled template on every run (no change detection shortcuts). `--dry-run` prints planned writes instead; `--check` prints differing paths without writing and exits `2` (for CI and pre-commit hooks); `--offline` fails on cache misses instead of fetching. `--watch` reruns on file changes (see Watch Mode). `--check`, `--dry-run`, and `--watch` are mutually exclusive.
 - `validate` auto-detects context: with only `templatry.source.toml` present it validates the source; with only `.config/templatry.toml` (or `--config`) present it validates the project and the resolved source. A repository holding both is both roles at once (a template source that manages its own files with templatry): the project validates first, then the source.
 - `cache clear` flushes the whole template cache; the next run re-pulls everything. `cache list` prints cached sources with sizes, last-use ages, and absolute paths, most recently used first.
-- Global flags: `-v`/`-vv` for more logs (`RUST_LOG` overrides), `-q` to silence non-error output.
+- Global flags: `-v`/`-vv` for more logs (`RUST_LOG` overrides), `-q` to silence non-error output, `--no-color` to disable colored output (a present `NO_COLOR` environment variable does the same, per <https://no-color.org>).
 - Exit codes: `0` success (or no diff for `--check`), `1` runtime or validation failure, `2` differences found by `--check` (or CLI usage errors).
 
 ## Project Configuration
