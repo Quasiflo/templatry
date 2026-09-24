@@ -1,16 +1,13 @@
 # * Backend Priority Order: Core, Aqua, Github, Package Manager (cargo, npm, pipx)
 
-[env]
-HK_PKL_BACKEND = "pkl" # TODO remove once upgraded to hk v2
-
 [tools]
+#* Main
 "core:rust" = "1.98.1"
-"core:java" = "25.0.2"
-"aqua:apple/pkl" = "0.32.1"
+#* Linting
+"aqua:jdx/hk" = "2.1.0"                    # Used for running linting, formatting & git hooks
 "aqua:mikefarah/yq" = "4.53.6"             # Used for validating & formatting JSON & toml parsing
-"aqua:tombi-toml/tombi" = "1.5.5"
+"aqua:tombi-toml/tombi" = "1.5.5"          # Used for linting & formatting toml
 "aqua:EmbarkStudios/cargo-deny" = "0.20.2" # Used for auditing dependencies (hk cargo deny step)
-"aqua:jdx/hk" = "1.58.1"                   # Used for linting, formatting & git hooks
 "aqua:rvben/rumdl" = "0.2.73"              # Used for linting & formatting markdown
 "aqua:loeffel-io/ls-lint" = "2.3.1"        # Used for enforcing folder & file naming conventions
 "aqua:lycheeverse/lychee" = "0.24.2"       # Used for checking for dead links

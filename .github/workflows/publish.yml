@@ -3,7 +3,6 @@ on:
   push:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'      # v1.2.3
-      - 'v[0-9]+.[0-9]+.[0-9]+-*'    # v1.2.3-preview, v1.2.3-beta.1, v1.2.3-dev.abc1234, etc.
 name: publish
 permissions: {} # no default token permissions; each job grants only what it needs
 concurrency:
@@ -12,7 +11,7 @@ concurrency:
 jobs:
   publish:
     name: Publish to crates.io
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     permissions:
       contents: read # checkout the tagged tree
       id-token: write # mint the OIDC token for crates.io trusted publishing

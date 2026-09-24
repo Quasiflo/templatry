@@ -1,44 +1,12 @@
 // * HK - Git Hook Configuration
 // This file ensures you are committing properly linted and formatted files which will pass ci
+amends "package://github.com/jdx/hk/releases/download/v2.1.0/hk@2.1.0#/Config.pkl"
 
-amends "package://github.com/jdx/hk/releases/download/v1.58.1/hk@1.58.1#/Config.pkl"
+import "generated/generated.pkl"
 
-// Glob all contribution files
-local generated_steps = import*("generated/hk-*.pkl")
-
-// Helper: collect every generated step for a given category
-local function collect(category: String) = new Group {
-  steps {
-    for (_, contrib in generated_steps) {
-      ...contrib.getPropertyOrNull(category) ?? new Mapping {}
+steps =
+  generated.addSteps((generated.steps) {
+    ["[lint] file extensions"] {
+      exclude = generated.steps["[lint] file extensions"].exclude + List("tests/fixtures/**")
     }
-  }
-}
-
-local _steps = new Mapping {
-  ["fix"] = collect("fix")
-  ["format"] = collect("format")
-  ["lint"] = (collect("lint")){
-    steps {
-      ["[lint] file extensions"] {
-        exclude = super.exclude + List("tests/fixtures/**")
-      }
-    }
-  }
-  ["common"] = collect("common")
-}
-
-hooks { // TODO remove and migrate to new structure once upgraded to HK v2
-  ["pre-commit"] {
-    steps = _steps
-    fix = true
-    stash = true
-  }
-  ["check"] {
-    steps = _steps
-  }
-  ["fix"] {
-    steps = _steps
-    fix = true
-  }
-}
+  })
