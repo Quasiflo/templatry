@@ -239,6 +239,323 @@ pub(crate) fn render_group(
     members: &[GroupMember],
     context: &ProjectContext,
 ) -> crate::Result<RenderedGroup> {
+    // Shared destinations combine template-only output first, then apply the
+    // shared override file once. The legacy per-member path applied a shared
+    // override file once per contributor, duplicating `append_bottom`/`append_top`
+    // text (and array-object pins in structured merges) N times.
+    if members.len() > 1
+        && let Some(group) = try_render_shared_group(members, context)?
+    {
+        return Ok(group);
+    }
+    render_group_legacy(dest, members, context)
+}
+
+/// Shared-destination fast path: template-only combine plus a single
+/// application of the shared override file.
+///
+/// Returns `Ok(None)` when the group is not a uniform shared case this path
+/// handles (distinct override/local files, mixed text strategies,
+/// `replace`/`none` members, mixed structured formats); callers fall back to
+/// the legacy per-member rendering so those groups keep their previous
+/// behavior (and existing diagnostics).
+fn try_render_shared_group(
+    members: &[GroupMember],
+    context: &ProjectContext,
+) -> crate::Result<Option<RenderedGroup>> {
+    struct Owned {
+        strategy: EffectiveStrategy,
+        policy: crate::config::ArrayPolicy,
+        template_text: String,
+        override_path: PathBuf,
+        override_text: Option<String>,
+        local_path: Option<PathBuf>,
+        local_text: Option<String>,
+    }
+
+    let mut owned: Vec<Owned> = Vec::with_capacity(members.len());
+    for member in members {
+        let template_path = member.source_root.join(member.template.template_path()?);
+        let template_bytes = crate::read_file_bytes(&template_path)?;
+        let generated_filename = member.template.resolved_generated_file()?;
+        let strategy = merge::effective_strategy(&member.template, &generated_filename)?;
+        // `replace` emits one override verbatim and `none` copies raw bytes:
+        // both are rejected or meaningless in shared groups, so leave them on
+        // the legacy path (which preserves existing validation diagnostics).
+        match strategy {
+            EffectiveStrategy::Replace | EffectiveStrategy::None => return Ok(None),
+            EffectiveStrategy::AppendTop
+            | EffectiveStrategy::AppendBottom
+            | EffectiveStrategy::Structured(_) => {}
+        }
+        let override_dir = context
+            .project_root
+            .join(member.template.resolved_override_dir(&member.configs));
+        let override_path = override_dir.join(member.template.resolved_override_file()?);
+        // `none` already returned above, so every remaining strategy decodes.
+        let template_text = String::from_utf8(template_bytes).map_err(|err| {
+            crate::invalid(&template_path, format!("file is not valid UTF-8: {err}"))
+        })?;
+        let override_text = match read_optional(&override_path, "override file")? {
+            Some(bytes) => Some(decode(&bytes, &override_path)?),
+            None => None,
+        };
+        let (local_path, local_text) = match member
+            .template
+            .local_override_file
+            .as_deref()
+            .filter(|name| !name.trim().is_empty())
+        {
+            Some(name) => {
+                let local_path = override_dir.join(name);
+                let local_text = match read_optional(&local_path, "local override file")? {
+                    Some(bytes) => Some(decode(&bytes, &local_path)?),
+                    None => None,
+                };
+                (Some(local_path), local_text)
+            }
+            None => (None, None),
+        };
+        owned.push(Owned {
+            strategy,
+            policy: member.template.array_policy.unwrap_or_default(),
+            template_text,
+            override_path,
+            override_text,
+            local_path,
+            local_text,
+        });
+    }
+
+    let uniform = owned
+        .iter()
+        .map(|layer| layer.strategy)
+        .all(|strategy| strategy == owned[0].strategy);
+    // Post-merge applies only when every member shares the same override file
+    // and the same local file (both `None` counts as sharing "no local").
+    // Distinct override files stay on the legacy per-member path: each override
+    // scopes to its own template there, preserving attribution and the
+    // interleaved ordering existing fixtures encode. A shared file on the
+    // legacy path would apply once per contributor (the duplication bug).
+    let shared_override = owned
+        .iter()
+        .map(|layer| layer.override_path.as_path())
+        .all(|path| path == owned[0].override_path.as_path());
+    let shared_local = owned
+        .iter()
+        .map(|layer| layer.local_path.as_deref())
+        .all(|path| path == owned[0].local_path.as_deref());
+    if !shared_override || !shared_local {
+        return Ok(None);
+    }
+    // Borrowed views over `members` (names, labels) plus `owned` (texts).
+    // Sharing was established above, so the paths are not needed further:
+    // there is exactly one override file and one local file in play.
+    let shared: Vec<SharedLayer<'_>> = members
+        .iter()
+        .zip(owned.iter())
+        .map(|(member, layer)| SharedLayer {
+            name: member.name.as_str(),
+            labels: &member.labels,
+            template_text: layer.template_text.as_str(),
+            override_text: layer.override_text.as_deref(),
+            local_text: layer.local_text.as_deref(),
+            strategy: layer.strategy,
+            policy: layer.policy,
+        })
+        .collect();
+    match owned[0].strategy {
+        EffectiveStrategy::Structured(_) => {
+            if !uniform {
+                return Ok(None);
+            }
+            let value = render_shared_structured(&shared)?;
+            let format = match owned[0].strategy {
+                EffectiveStrategy::Structured(format) => format,
+                _ => unreachable!("checked uniform structured"),
+            };
+            let content = merge::serialize_doc(&value, format)?.into_bytes();
+            Ok(Some(RenderedGroup {
+                content,
+                mode: None,
+            }))
+        }
+        EffectiveStrategy::AppendTop | EffectiveStrategy::AppendBottom => {
+            if !uniform {
+                // Mixed `append_top`/`append_bottom` in one destination has no
+                // defined override-after-merge order; keep legacy interleaving.
+                return Ok(None);
+            }
+            // Keep the literal-marker warning semantics of `render_contents`.
+            for (member, layer) in members.iter().zip(owned.iter()) {
+                for text in [layer.override_text.as_deref(), layer.local_text.as_deref()]
+                    .into_iter()
+                    .flatten()
+                {
+                    if text.contains(merge::DELETE_MARKER) {
+                        tracing::warn!(
+                            template = member.name.as_str(),
+                            "override contains `{}` but the strategy is not a structured merge: kept literally",
+                            merge::DELETE_MARKER
+                        );
+                        break;
+                    }
+                }
+            }
+            let content = render_shared_text(&shared).into_bytes();
+            Ok(Some(RenderedGroup {
+                content,
+                mode: None,
+            }))
+        }
+        EffectiveStrategy::Replace | EffectiveStrategy::None => Ok(None),
+    }
+}
+/// Combine template-only structured values, then merge the shared override
+/// (and local) file once.
+///
+/// Precondition: callers guarantee every layer shares the same override file
+/// and the same local file (established before building the layers), so the
+/// first present text in member-name order is the one file's content.
+/// Templates must combine cleanly on their own; the override applies after the
+/// completed merge.
+pub(crate) fn render_shared_structured(
+    layers: &[SharedLayer<'_>],
+) -> crate::Result<serde_json::Value> {
+    let format = match layers.first().map(|layer| layer.strategy) {
+        Some(EffectiveStrategy::Structured(format)) => format,
+        _ => {
+            return Err(crate::invalid(
+                Path::new("templatry.source.toml"),
+                "internal error: shared structured render without a structured strategy"
+                    .to_string(),
+            ));
+        }
+    };
+    // Template-only contributions, in member-name order for determinism.
+    let mut order: Vec<usize> = (0..layers.len()).collect();
+    order.sort_by(|left, right| layers[*left].name.cmp(layers[*right].name));
+    let mut contributions = Vec::with_capacity(layers.len());
+    for index in &order {
+        let layer = &layers[*index];
+        let value = merge::parse_doc(
+            layer.template_text,
+            format,
+            &format!("template `{}`", layer.name),
+        )?;
+        contributions.push(merge::Contribution {
+            template: layer.name,
+            labels: layer.labels,
+            value,
+        });
+    }
+    let mut combined = merge::combine_structured(&contributions)?;
+
+    // The one shared override file (first present text in name order).
+    if let Some(layer) = order
+        .iter()
+        .map(|index| &layers[*index])
+        .find(|layer| layer.override_text.is_some())
+    {
+        let text = layer.override_text.expect("found present override text");
+        let value = merge::parse_doc(
+            text,
+            format,
+            &format!("override for template `{}`", layer.name),
+        )?;
+        combined = merge::merge_structured(combined, value, layer.policy, layer.name)?;
+    }
+
+    // The one shared local file (first present text in name order).
+    if let Some(layer) = order
+        .iter()
+        .map(|index| &layers[*index])
+        .find(|layer| layer.local_text.is_some())
+    {
+        let text = layer.local_text.expect("found present local text");
+        let value = merge::parse_doc(
+            text,
+            format,
+            &format!("local override for template `{}`", layer.name),
+        )?;
+        combined = merge::merge_structured(combined, value, layer.policy, layer.name)?;
+    }
+    Ok(combined)
+}
+/// One member's texts plus provenance for shared-destination post-merge
+/// rendering (used by forward generation and back-propagation replays).
+///
+/// Precondition: every layer in a call shares the same override file and the
+/// same local file (callers establish this before building the layers).
+pub(crate) struct SharedLayer<'a> {
+    /// Contributing template name (for diagnostics and deterministic order).
+    pub name: &'a str,
+    /// Contributing template labels (for conflict diagnostics).
+    pub labels: &'a BTreeSet<String>,
+    /// Current template file text.
+    pub template_text: &'a str,
+    /// Current override file text (`None` when missing).
+    pub override_text: Option<&'a str>,
+    /// Current local override text (`None` when unset or missing).
+    pub local_text: Option<&'a str>,
+    /// Resolved strategy (uniform across the group).
+    pub strategy: EffectiveStrategy,
+    /// Merge policy for structured strategies.
+    pub policy: crate::config::ArrayPolicy,
+}
+
+/// Combine template-only text parts, then append/prepend the shared override
+/// (and local) file once.
+///
+/// Precondition: as for [`SharedLayer`], all layers share the same files, so
+/// the first present text in member-name order is the one file's content.
+pub(crate) fn render_shared_text(layers: &[SharedLayer<'_>]) -> String {
+    let strategy = layers
+        .first()
+        .map(|layer| layer.strategy)
+        .unwrap_or(EffectiveStrategy::AppendBottom);
+    let mut order: Vec<usize> = (0..layers.len()).collect();
+    order.sort_by(|left, right| layers[*left].name.cmp(layers[*right].name));
+
+    let mut templates: Vec<(&str, &str)> = Vec::with_capacity(layers.len());
+    for index in &order {
+        let layer = &layers[*index];
+        templates.push((layer.name, layer.template_text));
+    }
+    let combined_templates = merge::combine_text(&templates);
+
+    let shared_override = order
+        .iter()
+        .map(|index| &layers[*index])
+        .find_map(|layer| layer.override_text.filter(|text| !text.is_empty()));
+    let shared_local = order
+        .iter()
+        .map(|index| &layers[*index])
+        .find_map(|layer| layer.local_text.filter(|text| !text.is_empty()));
+
+    let mut segments: Vec<&str> = Vec::with_capacity(3);
+    if strategy == EffectiveStrategy::AppendTop {
+        segments.extend(shared_local);
+        segments.extend(shared_override);
+        segments.push(combined_templates.as_str());
+    } else {
+        segments.push(combined_templates.as_str());
+        segments.extend(shared_override);
+        segments.extend(shared_local);
+    }
+    segments.join("\n")
+}
+
+/// Legacy per-member rendering plus destination combination.
+///
+/// Single-member groups and non-uniform shared groups render each template
+/// with its override first, then combine. Uniform shared text/structured
+/// groups use the post-merge path above instead.
+fn render_group_legacy(
+    dest: &Path,
+    members: &[GroupMember],
+    context: &ProjectContext,
+) -> crate::Result<RenderedGroup> {
     let mut rendered = Vec::with_capacity(members.len());
     let mut modes = Vec::with_capacity(members.len());
     for member in members {

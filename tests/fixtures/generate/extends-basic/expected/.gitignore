@@ -1,9 +1,6 @@
 *.log
 target/
 
-# local
-secret.env
-
 *.o
 build/
 

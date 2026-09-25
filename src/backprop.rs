@@ -31,6 +31,8 @@ pub struct MemberView<'a> {
     pub labels: &'a BTreeSet<String>,
     /// Override file path, when known (needed to collapse identical writes).
     pub override_path: Option<&'a Path>,
+    /// Local override file path, when known (same-file locals apply once).
+    pub local_path: Option<&'a Path>,
     /// Current template file text.
     pub template_text: &'a str,
     /// Current override file text (`None` when missing).
@@ -962,6 +964,13 @@ fn restore_replay(
 /// Replay the full pipeline with a tentative override and masked-compare.
 ///
 /// Returns the parsed replay on masked equality, else a rejection reason.
+///
+/// Groups sharing one override file (and one local file) replay post-merge,
+/// mirroring forward generation: template-only contributions combine first,
+/// then the shared file applies once. Distinct override files replay
+/// per-member, preserving attribution (an edit to one template's keys folds
+/// into that template's override; post-merge would let any member absorb any
+/// edit and turn sharp attributions ambiguous).
 fn safety_replay(
     candidate: &MemberView<'_>,
     members: &[MemberView<'_>],
@@ -974,18 +983,118 @@ fn safety_replay(
         EffectiveStrategy::Structured(format) => format,
         _ => return Err("non-structured candidate in structured replay".to_string()),
     };
+    // All members in a structured replay share the candidate's format;
+    // anything else is a mixed-family group that forward generation rejects.
+    for member in members {
+        match member.strategy {
+            EffectiveStrategy::Structured(member_format) if member_format == format => {}
+            _ => return Err("mixed text output in structured replay".to_string()),
+        }
+    }
+    // Shared iff every override path is known and identical and every local
+    // path is identical (both `None` counts as sharing "no local"). Unknown
+    // (`None`) override paths never count as sharing: they stay per-member so
+    // attribution survives.
+    let shared_override = !members.is_empty()
+        && members[0].override_path.is_some()
+        && members
+            .iter()
+            .all(|member| same_override_file(member.override_path, members[0].override_path));
+    let shared_local = !members.is_empty()
+        && members
+            .iter()
+            .all(|member| member.local_path == members[0].local_path);
+    if shared_override && shared_local {
+        return safety_replay_shared(
+            candidate,
+            members,
+            tentative,
+            target,
+            ignore_keys,
+            ignore_values,
+            format,
+        );
+    }
+    safety_replay_per_member(
+        candidate,
+        members,
+        tentative,
+        target,
+        ignore_keys,
+        ignore_values,
+        format,
+    )
+}
+
+/// Post-merge replay for groups sharing one override file.
+fn safety_replay_shared(
+    candidate: &MemberView<'_>,
+    members: &[MemberView<'_>],
+    tentative: &Value,
+    target: &Value,
+    ignore_keys: &[IgnorePattern],
+    ignore_values: &[IgnorePattern],
+    format: DocFormat,
+) -> Result<Value, String> {
+    let tentative_text = merge::serialize_doc(tentative, format).map_err(|err| format!("{err}"))?;
+    // A fold that changed nothing replays the original override state:
+    // serializing a Null tentative would pass explicit JSON `null`,
+    // which replaces the whole document, while a missing override
+    // skips the merge entirely. Members sharing the candidate's
+    // override file replay with the tentative too: the fold rewrites
+    // that one file for all of them, so replaying the others against
+    // their stale on-disk text would reject every candidate (notably
+    // when removing the last pin — each replay would still contain it
+    // via the other members).
+    let mut override_texts: Vec<Option<&str>> = Vec::with_capacity(members.len());
+    for member in members {
+        let text = if member.name == candidate.name
+            || same_override_file(member.override_path, candidate.override_path)
+        {
+            if tentative.is_null() && member.override_text.is_none() {
+                None
+            } else {
+                Some(tentative_text.as_str())
+            }
+        } else {
+            member.override_text
+        };
+        override_texts.push(text);
+    }
+    let layers: Vec<crate::generate::SharedLayer<'_>> = members
+        .iter()
+        .zip(override_texts.iter())
+        .map(|(member, text)| crate::generate::SharedLayer {
+            name: member.name,
+            labels: member.labels,
+            template_text: member.template_text,
+            override_text: *text,
+            local_text: member.local_text,
+            strategy: member.strategy,
+            policy: member.policy,
+        })
+        .collect();
+    let combined =
+        crate::generate::render_shared_structured(&layers).map_err(|err| format!("{err}"))?;
+    finish_replay(combined, format, target, ignore_keys, ignore_values)
+}
+
+/// Per-member replay for groups with distinct override files.
+fn safety_replay_per_member(
+    candidate: &MemberView<'_>,
+    members: &[MemberView<'_>],
+    tentative: &Value,
+    target: &Value,
+    ignore_keys: &[IgnorePattern],
+    ignore_values: &[IgnorePattern],
+    format: DocFormat,
+) -> Result<Value, String> {
     let tentative_text = merge::serialize_doc(tentative, format).map_err(|err| format!("{err}"))?;
     let mut contributions = Vec::with_capacity(members.len());
     for member in members {
-        // A fold that changed nothing replays the original override state:
-        // serializing a Null tentative would pass explicit JSON `null`,
-        // which replaces the whole document, while a missing override
-        // skips the merge entirely. Members sharing the candidate's
-        // override file replay with the tentative too: the fold rewrites
-        // that one file for all of them, so replaying the others against
-        // their stale on-disk text would reject every candidate (notably
-        // when removing the last pin — each replay would still contain it
-        // via the other members).
+        // Same tentative-substitution and Null handling as the shared path;
+        // distinct files simply never share, so only the candidate replays
+        // the tentative.
         let text = if member.name == candidate.name
             || same_override_file(member.override_path, candidate.override_path)
         {
@@ -1018,6 +1127,17 @@ fn safety_replay(
         }
     }
     let combined = merge::combine_structured(&contributions).map_err(|err| format!("{err}"))?;
+    finish_replay(combined, format, target, ignore_keys, ignore_values)
+}
+
+/// Serialize a replayed value and masked-compare against the target.
+fn finish_replay(
+    combined: Value,
+    format: DocFormat,
+    target: &Value,
+    ignore_keys: &[IgnorePattern],
+    ignore_values: &[IgnorePattern],
+) -> Result<Value, String> {
     let replay_text = merge::serialize_doc(&combined, format).map_err(|err| format!("{err}"))?;
     let replay: Value =
         merge::parse_doc(&replay_text, format, "safety replay").map_err(|err| format!("{err}"))?;
@@ -1256,6 +1376,7 @@ mod tests {
             name,
             labels: label_set,
             override_path,
+            local_path: None,
             template_text,
             override_text,
             local_text,

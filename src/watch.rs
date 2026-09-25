@@ -352,6 +352,7 @@ struct MemberFiles {
     override_text: Option<String>,
     local_text: Option<String>,
     override_path: PathBuf,
+    local_path: Option<PathBuf>,
 }
 
 /// Read fresh file contents for every group member.
@@ -368,7 +369,7 @@ fn read_member_files(
             let template_text = crate::read_file(&template_path)?;
             let override_path = override_path_for(context, member)?;
             let override_text = read_layer(&override_path, "override file")?;
-            let local_text = match member
+            let (local_path, local_text) = match member
                 .template
                 .local_override_file
                 .as_deref()
@@ -379,15 +380,17 @@ fn read_member_files(
                         .parent()
                         .unwrap_or_else(|| Path::new("."))
                         .join(name);
-                    read_layer(&local_path, "local override file")?
+                    let local_text = read_layer(&local_path, "local override file")?;
+                    (Some(local_path), local_text)
                 }
-                None => None,
+                None => (None, None),
             };
             Ok(MemberFiles {
                 template_text,
                 override_text,
                 local_text,
                 override_path,
+                local_path,
             })
         })
         .collect()
@@ -418,7 +421,8 @@ fn snapshot_members<'a>(
             Ok(MemberView {
                 name: member.name.as_str(),
                 labels: &member.labels,
-                override_path: Some(&file.override_path),
+                override_path: Some(file.override_path.as_path()),
+                local_path: file.local_path.as_deref(),
                 template_text: file.template_text.as_str(),
                 override_text: file.override_text.as_deref(),
                 local_text: file.local_text.as_deref(),
