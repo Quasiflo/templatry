@@ -1,4 +1,4 @@
 [source]
 github = "Quasiflo/configs"
-ref = "v0.2.2"
+ref = "v0.2.4"
 enable_labels = ["github", "license", "rust", "toml"]
