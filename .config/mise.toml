@@ -8,7 +8,7 @@
 "aqua:mikefarah/yq" = "4.53.6"             # Used for validating & formatting JSON & toml parsing
 "aqua:tombi-toml/tombi" = "1.5.5"          # Used for linting & formatting toml
 "aqua:EmbarkStudios/cargo-deny" = "0.20.2" # Used for auditing dependencies (hk cargo deny step)
-"aqua:rvben/rumdl" = "0.2.74"              # Used for linting & formatting markdown
+"aqua:rvben/rumdl" = "0.2.75"              # Used for linting & formatting markdown
 "aqua:loeffel-io/ls-lint" = "2.3.1"        # Used for enforcing folder & file naming conventions
 "aqua:lycheeverse/lychee" = "0.24.2"       # Used for checking for dead links
 "github:kucherenko/jscpd" = "v5.3.0"       # Used for detecting code duplication
