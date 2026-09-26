@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.1](https://github.com/Quasiflo/templatry/compare/v0.2.0...v0.2.1) (2026-09-26)
+
+
+### Bug Fixes
+
+* prune stale generated files automatically ([9519e1d](https://github.com/Quasiflo/templatry/commit/9519e1d672110181eb56d7512380df5c5d58bdc1))
+* resolve override duplication bug in append_ modes ([45bc169](https://github.com/Quasiflo/templatry/commit/45bc16941dcd1062e4046fddbc774bcd09286314))
+
 ## [0.2.0](https://github.com/Quasiflo/templatry/compare/v0.1.0...v0.2.0) (2026-09-24)
 
 
