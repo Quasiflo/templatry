@@ -48,6 +48,12 @@ pub struct PlannedWrite {
 /// Always writes every enabled template (no content-hash short-circuiting);
 /// `--check` diffs in memory and fails with [`crate::Error::CheckDifferences`],
 /// `--dry-run` prints planned writes without touching disk.
+///
+/// Stale files from previously generated destinations that are no longer
+/// planned are pruned automatically (see the manifest section below): only
+/// files templatry itself wrote (path recorded in `templatry.manifest.json`
+/// with a matching SHA-256) are ever deleted. Anything else is kept with a
+/// warning. The manifest is expected to be gitignored.
 pub async fn run(options: &Options) -> crate::Result<()> {
     if options.watch {
         if options.check || options.dry_run {
@@ -58,17 +64,22 @@ pub async fn run(options: &Options) -> crate::Result<()> {
         }
         return crate::watch::run(options).await;
     }
-    let plan = plan(options).await?;
+    let context = load_context(options).await?;
+    let groups = group_members(&context)?;
+    let plan = render_plan(&context, &groups)?;
     if options.check {
-        return apply_check(&plan);
+        return apply_check(&plan, &context);
     }
     if options.dry_run {
         for write in &plan {
             println!("would write {}", write.dest.display());
         }
+        preview_orphans(&context, &plan);
         return Ok(());
     }
+    prune_orphans(&context, &plan);
     write_plan(&plan)?;
+    save_manifest_for_plan(&context, &plan);
     tracing::info!(files = plan.len(), "generated configuration files");
     Ok(())
 }
@@ -954,7 +965,10 @@ fn locate_project(config: Option<&Path>) -> crate::Result<(PathBuf, PathBuf)> {
 }
 
 /// Diff the plan against disk: print differing paths, fail on any difference.
-fn apply_check(plan: &[PlannedWrite]) -> crate::Result<()> {
+///
+/// Stale manifest-tracked files that are no longer planned also count as
+/// differences (they would be pruned by a real run).
+fn apply_check(plan: &[PlannedWrite], context: &ProjectContext) -> crate::Result<()> {
     let mut differing = Vec::new();
     for write in plan {
         let current = std::fs::read(&write.dest).unwrap_or_default();
@@ -962,6 +976,7 @@ fn apply_check(plan: &[PlannedWrite]) -> crate::Result<()> {
             differing.push(write.dest.clone());
         }
     }
+    differing.extend(present_orphans(context, plan));
     if differing.is_empty() {
         return Ok(());
     }
@@ -971,6 +986,328 @@ fn apply_check(plan: &[PlannedWrite]) -> crate::Result<()> {
     Err(crate::Error::CheckDifferences {
         count: differing.len(),
     })
+}
+
+// ---- Stale-file manifest ----------------------------------------------------
+// `templatry.manifest.json` sits alongside the project config file (e.g.
+// `.config/templatry.manifest.json`) and holds just the list of written
+// paths plus their SHA-256 hashes: `{"files": [{"path": "...", "sha256":
+// "..."}]}` with paths relative to the project root (absolute when the
+// destination escapes the root). It is expected to be gitignored.
+//
+// On every start (one-shot `generate` and each full watch cycle, never on
+// incremental regenerations) the current plan's destination set is diffed
+// against the manifest. Entries that are no longer generated are removed
+// from disk when the on-disk bytes still match the recorded hash, then
+// dropped from the manifest. Entries whose content diverged (foreign tool
+// or hand-edit repurposed the path) are never deleted: they are kept with
+// a warning and retained in the manifest so the next run warns again.
+
+/// Manifest filename, resolved as a sibling of the project config file.
+pub const MANIFEST_FILENAME: &str = "templatry.manifest.json";
+
+/// One manifest row: a previously written path plus its content hash.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct ManifestEntry {
+    path: String,
+    sha256: String,
+}
+
+/// Manifest document: just the list of written files.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+struct ManifestFile {
+    #[serde(default)]
+    files: Vec<ManifestEntry>,
+}
+
+/// Manifest location for a project config file.
+pub(crate) fn manifest_path(project_file: &Path) -> PathBuf {
+    project_file
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(MANIFEST_FILENAME)
+}
+
+/// Manifest key for a destination: project-relative with forward slashes, or
+/// the absolute path when the destination escapes the project root.
+fn manifest_key(project_root: &Path, dest: &Path) -> String {
+    if let Ok(relative) = dest.strip_prefix(project_root) {
+        return relative.to_string_lossy().replace('\\', "/");
+    }
+    dest.to_string_lossy().replace('\\', "/")
+}
+
+/// Absolute path for a manifest key.
+fn manifest_abs_path(project_root: &Path, key: &str) -> PathBuf {
+    let path = PathBuf::from(key);
+    if path.is_absolute() {
+        return path;
+    }
+    project_root.join(path)
+}
+
+/// Hex SHA-256 of bytes.
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    hex::encode(sha2::Sha256::digest(bytes))
+}
+
+/// Load the manifest as `path -> sha256`. Missing files yield an empty map;
+/// corrupt files warn and yield an empty map (which prunes nothing, since
+/// `old - new` is then empty, and the next successful run rewrites it).
+pub(crate) fn load_manifest(path: &Path) -> BTreeMap<String, String> {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return BTreeMap::new(),
+        Err(err) => {
+            tracing::warn!(manifest = %path.display(), "cannot read manifest, skipping prune: {err}");
+            return BTreeMap::new();
+        }
+    };
+    let file: ManifestFile = match serde_json::from_slice(&bytes) {
+        Ok(file) => file,
+        Err(err) => {
+            tracing::warn!(manifest = %path.display(), "corrupt manifest, skipping prune: {err}");
+            return BTreeMap::new();
+        }
+    };
+    let mut map = BTreeMap::new();
+    for entry in file.files {
+        if entry.path.trim().is_empty() {
+            continue;
+        }
+        map.insert(entry.path, entry.sha256);
+    }
+    map
+}
+
+/// Persist the manifest (best-effort: failures warn, never fail generation).
+fn save_manifest(path: &Path, entries: &BTreeMap<String, String>) {
+    let files: Vec<ManifestEntry> = entries
+        .iter()
+        .map(|(path, sha256)| ManifestEntry {
+            path: path.clone(),
+            sha256: sha256.clone(),
+        })
+        .collect();
+    let mut bytes = match serde_json::to_vec_pretty(&ManifestFile { files }) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            tracing::warn!(manifest = %path.display(), "cannot serialize manifest: {err}");
+            return;
+        }
+    };
+    bytes.push(b'\n');
+    if let Err(err) = atomic_write(path, &bytes, None) {
+        tracing::warn!(manifest = %path.display(), "cannot write manifest: {err}");
+    }
+}
+
+/// Current plan as `manifest key -> sha256(content)`.
+fn plan_manifest_entries(project_root: &Path, plan: &[PlannedWrite]) -> BTreeMap<String, String> {
+    let mut entries = BTreeMap::new();
+    for write in plan {
+        entries.insert(
+            manifest_key(project_root, &write.dest),
+            sha256_hex(&write.content),
+        );
+    }
+    entries
+}
+
+/// Old manifest keys no longer in the plan, sorted.
+fn orphan_keys(old: &BTreeMap<String, String>, new_keys: &BTreeSet<String>) -> Vec<String> {
+    old.keys()
+        .filter(|key| !new_keys.contains(*key))
+        .cloned()
+        .collect()
+}
+
+/// Orphaned files still present on disk (for `--check`).
+fn present_orphans(context: &ProjectContext, plan: &[PlannedWrite]) -> Vec<PathBuf> {
+    let manifest = manifest_path(&context.project_file);
+    if plan.iter().any(|write| write.dest == manifest) {
+        return Vec::new();
+    }
+    let old = load_manifest(&manifest);
+    let new_keys: BTreeSet<String> = plan
+        .iter()
+        .map(|write| manifest_key(&context.project_root, &write.dest))
+        .collect();
+    let mut present = Vec::new();
+    for key in orphan_keys(&old, &new_keys) {
+        let abs = manifest_abs_path(&context.project_root, &key);
+        if abs.is_file() {
+            present.push(abs);
+        }
+    }
+    present.sort();
+    present
+}
+
+/// Print what a `--dry-run` would prune, without touching disk.
+fn preview_orphans(context: &ProjectContext, plan: &[PlannedWrite]) {
+    let manifest = manifest_path(&context.project_file);
+    if plan.iter().any(|write| write.dest == manifest) {
+        tracing::warn!("manifest path is itself a generated destination: skipping prune preview");
+        return;
+    }
+    let old = load_manifest(&manifest);
+    let new_keys: BTreeSet<String> = plan
+        .iter()
+        .map(|write| manifest_key(&context.project_root, &write.dest))
+        .collect();
+    for key in orphan_keys(&old, &new_keys) {
+        let abs = manifest_abs_path(&context.project_root, &key);
+        let bytes = match std::fs::read(&abs) {
+            Ok(bytes) => bytes,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(err) => {
+                tracing::warn!(file = %abs.display(), "cannot read stale file, keeping: {err}");
+                continue;
+            }
+        };
+        if sha256_hex(&bytes) == old[&key] {
+            println!("would delete {}", abs.display());
+        } else {
+            tracing::warn!(
+                file = %abs.display(),
+                "stale file modified since last run, keeping (delete it manually to silence this warning)"
+            );
+        }
+    }
+}
+
+/// Delete clean orphans, returning the dirty-kept keys (with their old
+/// hashes) so the caller can retain them in the manifest.
+fn delete_orphans(
+    context: &ProjectContext,
+    old: &BTreeMap<String, String>,
+    orphans: &[String],
+) -> BTreeMap<String, String> {
+    let mut kept = BTreeMap::new();
+    for key in orphans {
+        let abs = manifest_abs_path(&context.project_root, key);
+        let bytes = match std::fs::read(&abs) {
+            Ok(bytes) => bytes,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(err) => {
+                tracing::warn!(file = %abs.display(), "cannot read stale file, keeping: {err}");
+                if let Some(hash) = old.get(key) {
+                    kept.insert(key.clone(), hash.clone());
+                }
+                continue;
+            }
+        };
+        if sha256_hex(&bytes) != old[key] {
+            tracing::warn!(
+                file = %abs.display(),
+                "stale file modified since last run, keeping (delete it manually to silence this warning)"
+            );
+            kept.insert(key.clone(), old[key].clone());
+            continue;
+        }
+        match std::fs::remove_file(&abs) {
+            Ok(()) => {
+                tracing::info!(file = %abs.display(), "removed stale generated file");
+                prune_empty_parents(&abs, &context.project_root);
+            }
+            Err(err) => {
+                tracing::warn!(file = %abs.display(), "cannot remove stale file, keeping: {err}");
+                kept.insert(key.clone(), old[key].clone());
+            }
+        }
+    }
+    kept
+}
+
+/// Remove newly empty parent directories up to (never including) the project
+/// root. Stops at the first non-empty directory.
+fn prune_empty_parents(file: &Path, stop_root: &Path) {
+    let mut current = file.parent();
+    while let Some(dir) = current {
+        if dir == stop_root {
+            break;
+        }
+        let is_empty = match std::fs::read_dir(dir) {
+            Ok(mut entries) => entries.next().is_none(),
+            Err(_) => false,
+        };
+        if !is_empty {
+            break;
+        }
+        if std::fs::remove_dir(dir).is_err() {
+            break;
+        }
+        current = dir.parent();
+    }
+}
+
+/// Full-start prune: diff the plan against the manifest and delete clean
+/// orphans. Dirty or foreign files are kept with a warning. Called by
+/// one-shot `generate` and watch full cycles only, never by incremental
+/// regenerations. Returns dirty-kept entries for manifest retention.
+pub(crate) fn prune_orphans(
+    context: &ProjectContext,
+    plan: &[PlannedWrite],
+) -> BTreeMap<String, String> {
+    let manifest = manifest_path(&context.project_file);
+    if plan.iter().any(|write| write.dest == manifest) {
+        tracing::warn!("manifest path is itself a generated destination: skipping prune");
+        return BTreeMap::new();
+    }
+    let old = load_manifest(&manifest);
+    if old.is_empty() {
+        return BTreeMap::new();
+    }
+    let new_keys: BTreeSet<String> = plan
+        .iter()
+        .map(|write| manifest_key(&context.project_root, &write.dest))
+        .collect();
+    delete_orphans(context, &old, &orphan_keys(&old, &new_keys))
+}
+
+/// Write the manifest for a completed full start: current plan hashes plus
+/// any dirty-kept orphans (with their old hashes, so they keep warning
+/// instead of being forgotten).
+pub(crate) fn save_manifest_for_plan(context: &ProjectContext, plan: &[PlannedWrite]) {
+    let manifest = manifest_path(&context.project_file);
+    if plan.iter().any(|write| write.dest == manifest) {
+        return;
+    }
+    let old = load_manifest(&manifest);
+    let mut entries = plan_manifest_entries(&context.project_root, plan);
+    let new_keys: BTreeSet<String> = entries.keys().cloned().collect();
+    for key in orphan_keys(&old, &new_keys) {
+        let abs = manifest_abs_path(&context.project_root, &key);
+        if abs.is_file() {
+            // Dirty-kept (or unreadable/unremovable) orphans stay tracked so
+            // the next run warns again instead of silently forgetting them.
+            if let Some(hash) = old.get(&key) {
+                entries.entry(key.clone()).or_insert_with(|| hash.clone());
+            }
+        }
+    }
+    save_manifest(&manifest, &entries);
+}
+
+/// Refresh one manifest row after an incremental watch write (no pruning).
+/// Best-effort: failures warn and never fail generation.
+pub(crate) fn record_manifest_entry(context: &ProjectContext, dest: &Path, content: &[u8]) {
+    let manifest = manifest_path(&context.project_file);
+    if *dest == manifest {
+        return;
+    }
+    // Outside-root destinations are tracked by absolute key just like full
+    // starts; the manifest file itself is never recorded.
+    let mut entries = load_manifest(&manifest);
+    // Avoid resurrecting a manifest when there was none and this is the only
+    // writer: still fine to create it, since the next full start reconciles.
+    entries.insert(
+        manifest_key(&context.project_root, dest),
+        sha256_hex(content),
+    );
+    save_manifest(&manifest, &entries);
 }
 
 /// Write a file atomically via temp-file-plus-rename in the same directory,

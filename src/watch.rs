@@ -106,7 +106,11 @@ impl Cycle {
         let pending = capture_pending(&groups, &shared.tracker);
 
         let plan = generate::render_plan(&context, &groups)?;
+        // Full-start prune only: diff the plan against the manifest and
+        // remove clean orphans. Incremental regenerations below never prune.
+        generate::prune_orphans(&context, &plan);
         generate::write_plan(&plan)?;
+        generate::save_manifest_for_plan(&context, &plan);
         {
             let mut tracker = lock_tracker(&shared.tracker);
             tracker.entries.retain(|dest, _| groups.contains_key(dest));
@@ -246,6 +250,7 @@ fn regenerate(
             content: content.clone(),
             mode: group.mode,
         }])?;
+        generate::record_manifest_entry(context, dest, &content);
         shared.guard.note_write(dest);
         lock_tracker(&shared.tracker)
             .entries
@@ -531,6 +536,7 @@ fn apply_backprop(
         shared.guard.note_write(&override_path);
     }
     generate::atomic_write(dest, replay_bytes, None)?;
+    generate::record_manifest_entry(context, dest, replay_bytes);
     shared.guard.note_write(dest);
     lock_tracker(&shared.tracker)
         .entries
