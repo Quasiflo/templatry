@@ -346,50 +346,50 @@ url_api = "https://api.github.com/repos/kucherenko/jscpd/releases/assets/5836342
 provenance = "github-attestations"
 
 [[tools."github:mongodb/kingfisher"]]
-version = "2.6.0"
+version = "2.7.0"
 backend = "github:mongodb/kingfisher"
-specifiers = ["v2.6.0"]
+specifiers = ["v2.7.0"]
 
 [tools."github:mongodb/kingfisher"."platforms.linux-arm64"]
-checksum = "sha256:4e68484ff04c0476c1cf84c1a235fa552f79f05e5d62ae0e09ebfd91542dc308"
-url = "https://github.com/mongodb/kingfisher/releases/download/v2.6.0/kingfisher-linux-arm64.tgz"
-url_api = "https://api.github.com/repos/mongodb/kingfisher/releases/assets/584573754"
+checksum = "sha256:44b15a0ca5b90f0d13f0d0a7a8d6320ea52662bb207e95d9763058a0cff80b2a"
+url = "https://github.com/mongodb/kingfisher/releases/download/v2.7.0/kingfisher-linux-arm64.tgz"
+url_api = "https://api.github.com/repos/mongodb/kingfisher/releases/assets/585499315"
 provenance = "github-attestations"
 
 [tools."github:mongodb/kingfisher"."platforms.linux-arm64-musl"]
-checksum = "sha256:4e68484ff04c0476c1cf84c1a235fa552f79f05e5d62ae0e09ebfd91542dc308"
-url = "https://github.com/mongodb/kingfisher/releases/download/v2.6.0/kingfisher-linux-arm64.tgz"
-url_api = "https://api.github.com/repos/mongodb/kingfisher/releases/assets/584573754"
+checksum = "sha256:44b15a0ca5b90f0d13f0d0a7a8d6320ea52662bb207e95d9763058a0cff80b2a"
+url = "https://github.com/mongodb/kingfisher/releases/download/v2.7.0/kingfisher-linux-arm64.tgz"
+url_api = "https://api.github.com/repos/mongodb/kingfisher/releases/assets/585499315"
 provenance = "github-attestations"
 
 [tools."github:mongodb/kingfisher"."platforms.linux-x64"]
-checksum = "sha256:05c50dfa1bcf65e3bd5a8087a8d39d44663fff94000d6671eb0eced3cb931a36"
-url = "https://github.com/mongodb/kingfisher/releases/download/v2.6.0/kingfisher-linux-x64.tgz"
-url_api = "https://api.github.com/repos/mongodb/kingfisher/releases/assets/584573596"
+checksum = "sha256:70781a6a4e6c52c7a5af120af1716abad958ca4a31225c8e2293719106276467"
+url = "https://github.com/mongodb/kingfisher/releases/download/v2.7.0/kingfisher-linux-x64.tgz"
+url_api = "https://api.github.com/repos/mongodb/kingfisher/releases/assets/585499191"
 provenance = "github-attestations"
 
 [tools."github:mongodb/kingfisher"."platforms.linux-x64-musl"]
-checksum = "sha256:05c50dfa1bcf65e3bd5a8087a8d39d44663fff94000d6671eb0eced3cb931a36"
-url = "https://github.com/mongodb/kingfisher/releases/download/v2.6.0/kingfisher-linux-x64.tgz"
-url_api = "https://api.github.com/repos/mongodb/kingfisher/releases/assets/584573596"
+checksum = "sha256:70781a6a4e6c52c7a5af120af1716abad958ca4a31225c8e2293719106276467"
+url = "https://github.com/mongodb/kingfisher/releases/download/v2.7.0/kingfisher-linux-x64.tgz"
+url_api = "https://api.github.com/repos/mongodb/kingfisher/releases/assets/585499191"
 provenance = "github-attestations"
 
 [tools."github:mongodb/kingfisher"."platforms.macos-arm64"]
-checksum = "sha256:8388018582d4a81fb06c2c932133bf04dba431d5db669ac712523399ae144861"
-url = "https://github.com/mongodb/kingfisher/releases/download/v2.6.0/kingfisher-darwin-arm64.tgz"
-url_api = "https://api.github.com/repos/mongodb/kingfisher/releases/assets/584573910"
+checksum = "sha256:0faf1d5790d4b45ad49bf0b08ca6d390b3177797bafe8162bc6d1a61dd576f07"
+url = "https://github.com/mongodb/kingfisher/releases/download/v2.7.0/kingfisher-darwin-arm64.tgz"
+url_api = "https://api.github.com/repos/mongodb/kingfisher/releases/assets/585499485"
 provenance = "github-attestations"
 
 [tools."github:mongodb/kingfisher"."platforms.macos-x64"]
-checksum = "sha256:2e7210aa351a568fa5b2104175c67dfcec9172d5e894a8a4103a7367a6a3f7d8"
-url = "https://github.com/mongodb/kingfisher/releases/download/v2.6.0/kingfisher-darwin-x64.tgz"
-url_api = "https://api.github.com/repos/mongodb/kingfisher/releases/assets/584573865"
+checksum = "sha256:35ae534df823f66fbad340a649c312f3e81378f3364f1e6584cb3686c05354ba"
+url = "https://github.com/mongodb/kingfisher/releases/download/v2.7.0/kingfisher-darwin-x64.tgz"
+url_api = "https://api.github.com/repos/mongodb/kingfisher/releases/assets/585499449"
 provenance = "github-attestations"
 
 [tools."github:mongodb/kingfisher"."platforms.windows-x64"]
-checksum = "sha256:94ae70aa0c955897885f8547439225fe6219bf19d2676054f67dcbf689f20abc"
-url = "https://github.com/mongodb/kingfisher/releases/download/v2.6.0/kingfisher-windows-x64.zip"
-url_api = "https://api.github.com/repos/mongodb/kingfisher/releases/assets/584573530"
+checksum = "sha256:68bd72e095325100edea6713c883438555999515ad911930767e4d07e182e82b"
+url = "https://github.com/mongodb/kingfisher/releases/download/v2.7.0/kingfisher-windows-x64.zip"
+url_api = "https://api.github.com/repos/mongodb/kingfisher/releases/assets/585499102"
 provenance = "github-attestations"
 
 [[tools."github:zizmorcore/zizmor"]]
