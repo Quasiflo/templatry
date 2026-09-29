@@ -4,7 +4,7 @@
 #* Main
 "core:rust" = "1.98.1"
 #* Linting
-"aqua:jdx/hk" = "2.1.0"                    # Used for running linting, formatting & git hooks
+"aqua:jdx/hk" = "2.2.0"                    # Used for running linting, formatting & git hooks
 "aqua:mikefarah/yq" = "4.53.6"             # Used for validating & formatting JSON & toml parsing
 "aqua:tombi-toml/tombi" = "1.5.5"          # Used for linting & formatting toml
 "aqua:EmbarkStudios/cargo-deny" = "0.20.2" # Used for auditing dependencies (hk cargo deny step)
