@@ -6,7 +6,7 @@
 #* Linting
 "aqua:jdx/hk" = "2.3.1"                    # Used for running linting, formatting & git hooks
 "aqua:mikefarah/yq" = "4.53.6"             # Used for validating & formatting JSON & toml parsing
-"aqua:tombi-toml/tombi" = "1.5.6"          # Used for linting & formatting toml
+"aqua:tombi-toml/tombi" = "1.5.8"          # Used for linting & formatting toml
 "aqua:EmbarkStudios/cargo-deny" = "0.20.2" # Used for auditing dependencies (hk cargo deny step)
 "aqua:rvben/rumdl" = "0.2.77"              # Used for linting & formatting markdown
 "aqua:loeffel-io/ls-lint" = "2.3.1"        # Used for enforcing folder & file naming conventions
