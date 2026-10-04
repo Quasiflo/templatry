@@ -16,6 +16,7 @@ tasks:
     desc: Build this project's release binary
     cmds:
       - task: snippets:build_rust
+      - task: snippets:sign_macos
       - gh release upload "$TAG_NAME" release/* --clobber
       - task: snippets:notarize_macos
   publish:
