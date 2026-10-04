@@ -12,6 +12,7 @@ vars:
 
 tasks:
   build:
+    dir: '{{.ROOT_DIR}}'
     desc: Build this project's release binary
     cmds:
       - task: snippets:build_rust
