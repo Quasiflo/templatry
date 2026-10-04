@@ -5,20 +5,19 @@ version: '3'
 includes:
   snippets:
     taskfile: https://github.com/Quasiflo/snippets.git//taskfile/taskfile.yml?ref=main # TODO pin ref
+    dir: '{{.ROOT_DIR}}'
 
 vars:
   PROJECT_NAME: templatry
 
 tasks:
   build:
-    dir: '{{.ROOT_DIR}}'
     desc: Build this project's release binary
     cmds:
       - task: snippets:build_rust
       - gh release upload "$TAG_NAME" release/* --clobber
       - task: snippets:notarize_macos
   publish:
-    dir: '{{.ROOT_DIR}}'
     cmds:
       - task: snippets:validate_notarization
       - cargo publish
