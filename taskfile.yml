@@ -11,12 +11,14 @@ vars:
 
 tasks:
   build:
+    dir: '{{.ROOT_DIR}}'
     desc: Build this project's release binary
     cmds:
       - task: snippets:build_rust
       - gh release upload "$TAG_NAME" release/* --clobber
       - task: snippets:notarize_macos
   publish:
+    dir: '{{.ROOT_DIR}}'
     cmds:
       - task: snippets:validate_notarization
       - cargo publish
