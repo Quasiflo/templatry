@@ -28,7 +28,8 @@ build_tools: &build_tools |
 
 build_commands: &build_commands |
             export TAG_NAME="<< pipeline.git.tag >>"
-            INFISICAL_TOKEN=$(infisical login --method=oidc-auth --machine-identity-id="$INFISICAL_IDENTITY_ID" --jwt="$CIRCLE_OIDC_TOKEN_V2" --silent --plain) eval "$(fnox export --profile publish --format shell)"
+            export INFISICAL_TOKEN="$(infisical login --method=oidc-auth --machine-identity-id="$INFISICAL_IDENTITY_ID" --jwt="$CIRCLE_OIDC_TOKEN_V2" --silent --plain)"
+            eval "$(fnox export --profile publish --format shell)"
             task build --yes
 
 workflows:
@@ -74,7 +75,8 @@ workflows:
                 at: /tmp/notarization
           commands: |
             export TAG_NAME="<< pipeline.git.tag >>"
-            INFISICAL_TOKEN=$(infisical login --method=oidc-auth --machine-identity-id="$INFISICAL_IDENTITY_ID" --jwt="$CIRCLE_OIDC_TOKEN_V2" --silent --plain) eval "$(fnox export --profile publish --format shell)"
+            export INFISICAL_TOKEN="$(infisical login --method=oidc-auth --machine-identity-id="$INFISICAL_IDENTITY_ID" --jwt="$CIRCLE_OIDC_TOKEN_V2" --silent --plain)"
+            eval "$(fnox export --profile publish --format shell)"
             task publish --yes
           requires:
             - build
