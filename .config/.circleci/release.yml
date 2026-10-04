@@ -1,0 +1,81 @@
+---
+version: 2.1
+orbs:
+  with-mise: quasiflo/with-mise@0.1.0
+
+executors:
+  linux:
+    docker:
+      - image: cimg/base:current@sha256:668174490adc470cd34eb3aa178939d65f817bc13ef657a94ff0278338f7d8da
+    resource_class: small
+  linux-arm:
+    machine:
+      image: ubuntu-2204:current
+    resource_class: arm.medium
+  macos:
+    macos:
+      xcode: 27.0.0
+    resource_class: m4pro.medium
+
+release_tags: &release_tags pipeline.git.tag matches /^vt[0-9]+\.[0-9]+\.[0-9]+$/
+
+build_tools: &build_tools |
+            core:rust,
+            packslip:github.com/jdx/fnox,
+            aqua:go-task/task,
+            aqua:cli/cli,
+            github:Infisical/cli,
+
+build_commands: &build_commands |
+            export TAG_NAME="<< pipeline.git.tag >>"
+            INFISICAL_TOKEN=$(infisical login --method=oidc-auth --machine-identity-id="$INFISICAL_IDENTITY_ID" --jwt="$CIRCLE_OIDC_TOKEN_V2" --silent --plain) eval "$(fnox export --profile publish --format shell)"
+            task build --yes
+
+workflows:
+  build-release:
+    jobs:
+      - with-mise/run_task:
+          name: build_macos
+          filters: *release_tags
+          context:
+            - infisical-prod
+          executor: macos
+          use_tools: *build_tools
+          commands: *build_commands
+          post-steps:
+            - persist_to_workspace:
+                root: /tmp/notarization
+                paths:
+                  - info.json
+      - with-mise/run_task:
+          filters: *release_tags
+          context:
+            - infisical-prod
+          matrix:
+            alias: build
+            parameters:
+              executor: [linux, linux-arm]
+          use_tools: *build_tools
+          commands: *build_commands
+      - with-mise/run_task:
+          filters: *release_tags
+          context:
+            - infisical-prod
+          executor: linux
+          use_tools: |
+            core:rust,
+            packslip:github.com/jdx/fnox,
+            aqua:go-task/task,
+            aqua:cli/cli,
+            github:Infisical/cli,
+            github:indygreg/apple-platform-rs
+          pre-steps:
+            - attach_workspace:
+                at: /tmp/notarization
+          commands: |
+            export TAG_NAME="<< pipeline.git.tag >>"
+            INFISICAL_TOKEN=$(infisical login --method=oidc-auth --machine-identity-id="$INFISICAL_IDENTITY_ID" --jwt="$CIRCLE_OIDC_TOKEN_V2" --silent --plain) eval "$(fnox export --profile publish --format shell)"
+            task publish --yes
+          requires:
+            - build
+            - build_macos

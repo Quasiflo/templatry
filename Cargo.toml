@@ -9,7 +9,7 @@ repository = "https://github.com/Quasiflo/templatry"
 license = "Apache-2.0"
 keywords = ["cli", "config", "configuration", "template", "terminal"]
 categories = ["command-line-utilities", "config"]
-exclude = [".config/", ".github/", ".vscode/", "AGENTS.md", "docs/", "scripts/"]
+exclude = [".config/", ".github/", ".vscode/", "AGENTS.md", "docs/", "fnox.toml", "scripts/", "taskfile.yml"]
 
 [lib]
 name = "templatry"
@@ -43,3 +43,7 @@ watchexec = "8"
 watchexec-signals = "5"
 yaml_serde = "0.10"
 zip = { version = "8", default-features = false, features = ["deflate"] }
+
+[profile.release]
+strip = true
+lto = "thin"

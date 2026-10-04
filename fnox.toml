@@ -1,0 +1,11 @@
+if_missing = "error"
+
+[providers]
+infisical = { type = "infisical", project_id = "ab6e4fdb-e00f-4e46-994d-a0b4725da4cc", environment = "prod", path = "/templatry" }
+
+[profiles.publish.secrets]
+GITHUB_TOKEN = { value = "GITHUB_TOKEN", provider = "infisical" }
+CARGO_REGISTRY_TOKEN = { value = "CARGO_REGISTRY_TOKEN", provider = "infisical" }
+APPLE_ISSUER_ID = { value = "APPLE_ISSUER_ID", provider = "infisical" }
+APPLE_API_KEY_ID = { value = "APPLE_API_KEY_ID", provider = "infisical" }
+APPLE_API_KEY_CONTENT = { value = "APPLE_API_KEY_CONTENT", provider = "infisical" }

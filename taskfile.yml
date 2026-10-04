@@ -1,0 +1,23 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+---
+version: '3'
+
+includes:
+  snippets:
+    taskfile: https://github.com/Quasiflo/snippets.git//taskfile/taskfile.yml?ref=main # TODO pin ref
+
+vars:
+  PROJECT_NAME: templatry
+
+tasks:
+  build:
+    desc: Build this project's release binary
+    cmds:
+      - task: snippets:build_rust
+      - gh release upload "$TAG_NAME" release/* --clobber
+      - task: snippets:notarize_macos
+  publish:
+    cmds:
+      - task: snippets:validate_notarization
+      - cargo publish
+      - gh release edit "$TAG_NAME" --draft=false
