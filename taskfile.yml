@@ -20,4 +20,4 @@ tasks:
     cmds:
       - task: snippets:validate_notarization
       - cargo publish
-      - gh release edit "$TAG_NAME" --draft=false
+      # - gh release edit "$TAG_NAME" --draft=false
