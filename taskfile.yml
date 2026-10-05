@@ -4,7 +4,7 @@ version: '3'
 
 includes:
   snippets:
-    taskfile: https://github.com/Quasiflo/snippets.git//taskfile/taskfile.yml?ref=main # TODO pin ref
+    taskfile: https://github.com/Quasiflo/snippets.git//taskfile/taskfile.yml?ref=v0.1.0
     dir: '{{.ROOT_DIR}}'
 
 vars:
@@ -23,4 +23,4 @@ tasks:
     cmds:
       - task: snippets:validate_notarization
       - cargo publish
-      # - gh release edit "$TAG_NAME" --draft=false
+      - gh release edit "$TAG_NAME" --draft=false
