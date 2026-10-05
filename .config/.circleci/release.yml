@@ -1,7 +1,7 @@
 ---
 version: 2.1
 orbs:
-  with-mise: quasiflo/with-mise@0.1.0
+  with-mise: quasiflo/with-mise@0.1.1
 
 executors:
   linux:
