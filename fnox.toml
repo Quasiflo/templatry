@@ -11,4 +11,3 @@ APPLE_API_KEY_ID = { value = "APPLE_API_KEY_ID", provider = "infisical" }
 APPLE_API_KEY_CONTENT = { value = "APPLE_API_KEY_CONTENT", provider = "infisical" }
 APPLE_CERTIFICATE = { value = "APPLE_CERTIFICATE", provider = "infisical" }
 APPLE_CERT_PASSWORD = { value = "APPLE_CERT_PASSWORD", provider = "infisical" }
-APPLE_SIGN_IDENTITY = { value = "APPLE_SIGN_IDENTITY", provider = "infisical" }
