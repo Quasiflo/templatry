@@ -43,50 +43,50 @@ url = "https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/carg
 url_api = "https://api.github.com/repos/EmbarkStudios/cargo-deny/releases/assets/471599057"
 
 [[tools."aqua:cli/cli"]]
-version = "2.101.0"
+version = "2.102.0"
 backend = "aqua:cli/cli"
-specifiers = ["2.101.0"]
+specifiers = ["2.102.0"]
 
 [tools."aqua:cli/cli"."platforms.linux-arm64"]
-checksum = "sha256:b57e8063f18862647c9d22727c32e9da1b963f8bf9db648fe123a6975695640f"
-url = "https://github.com/cli/cli/releases/download/v2.101.0/gh_2.101.0_linux_arm64.tar.gz"
-url_api = "https://api.github.com/repos/cli/cli/releases/assets/565857147"
+checksum = "sha256:7862c86c72f43df3a2d93ddde6f473285b4e2af61b494849846827e513ef6484"
+url = "https://github.com/cli/cli/releases/download/v2.102.0/gh_2.102.0_linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/cli/cli/releases/assets/599854680"
 provenance = "github-attestations"
 
 [tools."aqua:cli/cli"."platforms.linux-arm64-musl"]
-checksum = "sha256:b57e8063f18862647c9d22727c32e9da1b963f8bf9db648fe123a6975695640f"
-url = "https://github.com/cli/cli/releases/download/v2.101.0/gh_2.101.0_linux_arm64.tar.gz"
-url_api = "https://api.github.com/repos/cli/cli/releases/assets/565857147"
+checksum = "sha256:7862c86c72f43df3a2d93ddde6f473285b4e2af61b494849846827e513ef6484"
+url = "https://github.com/cli/cli/releases/download/v2.102.0/gh_2.102.0_linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/cli/cli/releases/assets/599854680"
 provenance = "github-attestations"
 
 [tools."aqua:cli/cli"."platforms.linux-x64"]
-checksum = "sha256:9bca2d1c16825f109907a23307628a2f0698fbf99662b73a5cf0b020293072b8"
-url = "https://github.com/cli/cli/releases/download/v2.101.0/gh_2.101.0_linux_amd64.tar.gz"
-url_api = "https://api.github.com/repos/cli/cli/releases/assets/565857134"
+checksum = "sha256:bb766f710eef8ede859c18578c72c327597cd4c8a85b06001b1f3843c6019386"
+url = "https://github.com/cli/cli/releases/download/v2.102.0/gh_2.102.0_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/cli/cli/releases/assets/599854672"
 provenance = "github-attestations"
 
 [tools."aqua:cli/cli"."platforms.linux-x64-musl"]
-checksum = "sha256:9bca2d1c16825f109907a23307628a2f0698fbf99662b73a5cf0b020293072b8"
-url = "https://github.com/cli/cli/releases/download/v2.101.0/gh_2.101.0_linux_amd64.tar.gz"
-url_api = "https://api.github.com/repos/cli/cli/releases/assets/565857134"
+checksum = "sha256:bb766f710eef8ede859c18578c72c327597cd4c8a85b06001b1f3843c6019386"
+url = "https://github.com/cli/cli/releases/download/v2.102.0/gh_2.102.0_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/cli/cli/releases/assets/599854672"
 provenance = "github-attestations"
 
 [tools."aqua:cli/cli"."platforms.macos-arm64"]
-checksum = "sha256:e4303e39d8f07141c4bad4b99b01079f05029c59b27076e8fbc825c985ecdd8b"
-url = "https://github.com/cli/cli/releases/download/v2.101.0/gh_2.101.0_macOS_arm64.zip"
-url_api = "https://api.github.com/repos/cli/cli/releases/assets/565857200"
+checksum = "sha256:da922c20d1792e5b2cbf375593d7a658acf034c12c84e007e71c76ef959c337e"
+url = "https://github.com/cli/cli/releases/download/v2.102.0/gh_2.102.0_macOS_arm64.zip"
+url_api = "https://api.github.com/repos/cli/cli/releases/assets/599854720"
 provenance = "github-attestations"
 
 [tools."aqua:cli/cli"."platforms.macos-x64"]
-checksum = "sha256:a6fd66c88e2f07d6e4e058173db341d07dd74d58cf8f19ae668293d2bb614ca3"
-url = "https://github.com/cli/cli/releases/download/v2.101.0/gh_2.101.0_macOS_amd64.zip"
-url_api = "https://api.github.com/repos/cli/cli/releases/assets/565857203"
+checksum = "sha256:b245f24eb2bf5f75b426b4c26da3651a107f8d5b6f4fddfbfccc5679041378b3"
+url = "https://github.com/cli/cli/releases/download/v2.102.0/gh_2.102.0_macOS_amd64.zip"
+url_api = "https://api.github.com/repos/cli/cli/releases/assets/599854716"
 provenance = "github-attestations"
 
 [tools."aqua:cli/cli"."platforms.windows-x64"]
-checksum = "sha256:bc6c814367b193cd8e713611d61e36013c0ef843b8f516458fe3eda039192794"
-url = "https://github.com/cli/cli/releases/download/v2.101.0/gh_2.101.0_windows_amd64.zip"
-url_api = "https://api.github.com/repos/cli/cli/releases/assets/565857681"
+checksum = "sha256:ae64e556ecc240b200f7eba60d550e4bb60d78e860e69dd88c449405b86067f4"
+url = "https://github.com/cli/cli/releases/download/v2.102.0/gh_2.102.0_windows_amd64.zip"
+url_api = "https://api.github.com/repos/cli/cli/releases/assets/599854760"
 provenance = "github-attestations"
 
 [[tools."aqua:go-task/task"]]
@@ -351,44 +351,44 @@ url_api = "https://api.github.com/repos/tombi-toml/tombi/releases/assets/5999232
 provenance = "github-attestations"
 
 [[tools."github:Infisical/cli"]]
-version = "0.43.137"
+version = "0.43.138"
 backend = "github:Infisical/cli"
-specifiers = ["0.43.137"]
+specifiers = ["v0.43.138"]
 
 [tools."github:Infisical/cli"."platforms.linux-arm64"]
-checksum = "sha256:2b58b3f9af8a44d13c05e3f9ee102ffbe8b9af5eb752e408dae5ea48a6be23f3"
-url = "https://github.com/Infisical/cli/releases/download/v0.43.137/cli_0.43.137_linux_arm64.tar.gz"
-url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/587040131"
+checksum = "sha256:90a0f131ca11d64311b3994f3ff776622acd5b3bec931861d4425f2dc7316dcb"
+url = "https://github.com/Infisical/cli/releases/download/v0.43.138/cli_0.43.138_linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/599703932"
 
 [tools."github:Infisical/cli"."platforms.linux-arm64-musl"]
-checksum = "sha256:2b58b3f9af8a44d13c05e3f9ee102ffbe8b9af5eb752e408dae5ea48a6be23f3"
-url = "https://github.com/Infisical/cli/releases/download/v0.43.137/cli_0.43.137_linux_arm64.tar.gz"
-url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/587040131"
+checksum = "sha256:90a0f131ca11d64311b3994f3ff776622acd5b3bec931861d4425f2dc7316dcb"
+url = "https://github.com/Infisical/cli/releases/download/v0.43.138/cli_0.43.138_linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/599703932"
 
 [tools."github:Infisical/cli"."platforms.linux-x64"]
-checksum = "sha256:308a90c7f9c307cb9c348d352a797a3a63b02e1a7836adbe8afddfd75c855531"
-url = "https://github.com/Infisical/cli/releases/download/v0.43.137/cli_0.43.137_linux_amd64.tar.gz"
-url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/587040120"
+checksum = "sha256:45a98380964650e4cc2b57ff5361d174afb55b3daf7c2465640d3a7bb7550f92"
+url = "https://github.com/Infisical/cli/releases/download/v0.43.138/cli_0.43.138_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/599703931"
 
 [tools."github:Infisical/cli"."platforms.linux-x64-musl"]
-checksum = "sha256:308a90c7f9c307cb9c348d352a797a3a63b02e1a7836adbe8afddfd75c855531"
-url = "https://github.com/Infisical/cli/releases/download/v0.43.137/cli_0.43.137_linux_amd64.tar.gz"
-url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/587040120"
+checksum = "sha256:45a98380964650e4cc2b57ff5361d174afb55b3daf7c2465640d3a7bb7550f92"
+url = "https://github.com/Infisical/cli/releases/download/v0.43.138/cli_0.43.138_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/599703931"
 
 [tools."github:Infisical/cli"."platforms.macos-arm64"]
-checksum = "sha256:05a16daab6812de642fb1071d28a839088f204e9d4d3a0072fa5a7fc938c0d03"
-url = "https://github.com/Infisical/cli/releases/download/v0.43.137/cli_0.43.137_darwin_arm64.tar.gz"
-url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/587034100"
+checksum = "sha256:fc1813e7909bd35b118d4079b45a2c470818508dc0f5a1211df1e8f035589765"
+url = "https://github.com/Infisical/cli/releases/download/v0.43.138/cli_0.43.138_darwin_arm64.tar.gz"
+url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/599690092"
 
 [tools."github:Infisical/cli"."platforms.macos-x64"]
-checksum = "sha256:134a2db5382ec62ab8c51d3aba885acba6475b4444f0e0c3f58adfdd0b28328c"
-url = "https://github.com/Infisical/cli/releases/download/v0.43.137/cli_0.43.137_darwin_amd64.tar.gz"
-url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/587034098"
+checksum = "sha256:98efc047f5948c892b6dc9ca5a3c22d82bf6d27fedebf246e208bd275f8b70cc"
+url = "https://github.com/Infisical/cli/releases/download/v0.43.138/cli_0.43.138_darwin_amd64.tar.gz"
+url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/599690093"
 
 [tools."github:Infisical/cli"."platforms.windows-x64"]
-checksum = "sha256:cd2a1c07b310f895e029ea1d7a1649c96ea0b313d56f9844a78f88d8409646d1"
-url = "https://github.com/Infisical/cli/releases/download/v0.43.137/cli_0.43.137_windows_amd64.zip"
-url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/587040139"
+checksum = "sha256:37ed88381a8f6014823f91d299f8b8f90e2f9859180d956f38e42e34c2a39982"
+url = "https://github.com/Infisical/cli/releases/download/v0.43.138/cli_0.43.138_windows_amd64.zip"
+url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/599703933"
 
 [[tools."github:indygreg/apple-platform-rs"]]
 version = "0.29.0"
