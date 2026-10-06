@@ -5,20 +5,20 @@
 "core:rust" = "1.99.0"
 "packslip:github.com/jdx/fnox" = "1.36.0"                                                        # Used for env vars & secrets
 "aqua:cli/cli" = "2.102.0"                                                                       # Used for uploading build artifacts on release
-"aqua:go-task/task" = "3.53.1"                                                                   # Used for running tasks in IDE and CI
+"aqua:go-task/task" = "3.54.0"                                                                   # Used for running tasks in IDE and CI
 "github:Infisical/cli" = "v0.43.138"                                                              # Backend to retrieve secrets for fnox from
 "github:indygreg/apple-platform-rs" = { version = "0.29.0", version_prefix = "apple-codesign/" } # Used to validate notarisation succeeded from linux runner
 #* Linting
 "packslip:github.com/jdx/hk" = "2.4.0"     # Used for running linting, formatting & git hooks
 "aqua:mikefarah/yq" = "4.54.1"             # Used for validating & formatting JSON & toml parsing
-"aqua:tombi-toml/tombi" = "1.6.1"          # Used for linting & formatting toml
+"aqua:tombi-toml/tombi" = "1.7.0"          # Used for linting & formatting toml
 "aqua:EmbarkStudios/cargo-deny" = "0.20.2" # Used for auditing dependencies (hk cargo deny step)
 "aqua:rvben/rumdl" = "0.2.78"              # Used for linting & formatting markdown
 "aqua:loeffel-io/ls-lint" = "2.3.1"        # Used for enforcing folder & file naming conventions
 "aqua:lycheeverse/lychee" = "0.24.2"       # Used for checking for dead links
 "github:kucherenko/jscpd" = "v5.4.0"       # Used for detecting code duplication
 "github:zizmorcore/zizmor" = "v1.30.1"     # Used for statically analyzing github actions
-"github:mongodb/kingfisher" = "v2.8.0"     # Used for checking for leaked credentials & secrets
+"github:mongodb/kingfisher" = "v2.9.0"     # Used for checking for leaked credentials & secrets
 
 [settings]
 lockfile = true
