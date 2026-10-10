@@ -6,7 +6,7 @@
 "packslip:github.com/jdx/fnox" = "1.36.0"                                                        # Used for env vars & secrets
 "aqua:cli/cli" = "2.102.0"                                                                       # Used for uploading build artifacts on release
 "aqua:go-task/task" = "3.54.0"                                                                   # Used for running tasks in IDE and CI
-"github:Infisical/cli" = "v0.43.138"                                                              # Backend to retrieve secrets for fnox from
+"github:Infisical/cli" = "v0.43.139"                                                              # Backend to retrieve secrets for fnox from
 "github:indygreg/apple-platform-rs" = { version = "0.29.0", version_prefix = "apple-codesign/" } # Used to validate notarisation succeeded from linux runner
 #* Linting
 "packslip:github.com/jdx/hk" = "2.4.0"     # Used for running linting, formatting & git hooks
