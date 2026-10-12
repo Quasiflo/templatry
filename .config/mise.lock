@@ -351,44 +351,44 @@ url_api = "https://api.github.com/repos/tombi-toml/tombi/releases/assets/6159019
 provenance = "github-attestations"
 
 [[tools."github:Infisical/cli"]]
-version = "0.43.139"
+version = "0.43.140"
 backend = "github:Infisical/cli"
-specifiers = ["v0.43.139"]
+specifiers = ["v0.43.140"]
 
 [tools."github:Infisical/cli"."platforms.linux-arm64"]
-checksum = "sha256:92ad9b8bfb57f9d71a64fb6b493ae8c73eb9ef664578cddc9fc32228e65afc41"
-url = "https://github.com/Infisical/cli/releases/download/v0.43.139/cli_0.43.139_linux_arm64.tar.gz"
-url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/613049168"
+checksum = "sha256:41aa1721a40d5bcdac7d8010cc1829b3e432b972084019e6e2afde30f5a4dfcd"
+url = "https://github.com/Infisical/cli/releases/download/v0.43.140/cli_0.43.140_linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/620267130"
 
 [tools."github:Infisical/cli"."platforms.linux-arm64-musl"]
-checksum = "sha256:92ad9b8bfb57f9d71a64fb6b493ae8c73eb9ef664578cddc9fc32228e65afc41"
-url = "https://github.com/Infisical/cli/releases/download/v0.43.139/cli_0.43.139_linux_arm64.tar.gz"
-url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/613049168"
+checksum = "sha256:41aa1721a40d5bcdac7d8010cc1829b3e432b972084019e6e2afde30f5a4dfcd"
+url = "https://github.com/Infisical/cli/releases/download/v0.43.140/cli_0.43.140_linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/620267130"
 
 [tools."github:Infisical/cli"."platforms.linux-x64"]
-checksum = "sha256:817830de7cb845c639862accd8fddc5d185449bccd358c91a941a24b070d0899"
-url = "https://github.com/Infisical/cli/releases/download/v0.43.139/cli_0.43.139_linux_amd64.tar.gz"
-url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/613049189"
+checksum = "sha256:c9f014c78cb1b4ba57f758f921843dbe541a3c8d2b83e622b0dc67d77ead4178"
+url = "https://github.com/Infisical/cli/releases/download/v0.43.140/cli_0.43.140_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/620267131"
 
 [tools."github:Infisical/cli"."platforms.linux-x64-musl"]
-checksum = "sha256:817830de7cb845c639862accd8fddc5d185449bccd358c91a941a24b070d0899"
-url = "https://github.com/Infisical/cli/releases/download/v0.43.139/cli_0.43.139_linux_amd64.tar.gz"
-url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/613049189"
+checksum = "sha256:c9f014c78cb1b4ba57f758f921843dbe541a3c8d2b83e622b0dc67d77ead4178"
+url = "https://github.com/Infisical/cli/releases/download/v0.43.140/cli_0.43.140_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/620267131"
 
 [tools."github:Infisical/cli"."platforms.macos-arm64"]
-checksum = "sha256:bf5d311b1cac5f3969c44949a32d026df9be42b5b1a454fd0e4061a3b23fa219"
-url = "https://github.com/Infisical/cli/releases/download/v0.43.139/cli_0.43.139_darwin_arm64.tar.gz"
-url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/613033917"
+checksum = "sha256:1c82aedd627d1c73972cc92ad58412a44fab94d108c5bd052e3225323cf62313"
+url = "https://github.com/Infisical/cli/releases/download/v0.43.140/cli_0.43.140_darwin_arm64.tar.gz"
+url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/620261757"
 
 [tools."github:Infisical/cli"."platforms.macos-x64"]
-checksum = "sha256:2793368fb8759b47ef55f17145d22ebaa53fbd751beb4fdb5a6b51dfcf261e64"
-url = "https://github.com/Infisical/cli/releases/download/v0.43.139/cli_0.43.139_darwin_amd64.tar.gz"
-url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/613033920"
+checksum = "sha256:1d65801c336e9e6ab441f6e57f3b3d209fffeaf2d26ac8d04dd8510602f5dcaa"
+url = "https://github.com/Infisical/cli/releases/download/v0.43.140/cli_0.43.140_darwin_amd64.tar.gz"
+url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/620261753"
 
 [tools."github:Infisical/cli"."platforms.windows-x64"]
-checksum = "sha256:dbf30a405d064b999a02d3094fd18318dbb7f61fedc674849b634472176260e5"
-url = "https://github.com/Infisical/cli/releases/download/v0.43.139/cli_0.43.139_windows_amd64.zip"
-url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/613049182"
+checksum = "sha256:f8221a90b7c1f6c055ad3c4be8f1262a178c912f66a1411b0d3dee125c9d3eb5"
+url = "https://github.com/Infisical/cli/releases/download/v0.43.140/cli_0.43.140_windows_amd64.zip"
+url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/620267141"
 
 [[tools."github:indygreg/apple-platform-rs"]]
 version = "0.29.0"
@@ -481,50 +481,50 @@ url_api = "https://api.github.com/repos/kucherenko/jscpd/releases/assets/6015336
 provenance = "github-attestations"
 
 [[tools."github:mongodb/kingfisher"]]
-version = "2.11.0"
+version = "2.11.1"
 backend = "github:mongodb/kingfisher"
-specifiers = ["v2.11.0"]
+specifiers = ["v2.11.1"]
 
 [tools."github:mongodb/kingfisher"."platforms.linux-arm64"]
-checksum = "sha256:4fef19da45e05480fe8e89ff990d280b7f75296d2f2ca32acafdeb18839fe56c"
-url = "https://github.com/mongodb/kingfisher/releases/download/v2.11.0/kingfisher-linux-arm64.tgz"
-url_api = "https://api.github.com/repos/mongodb/kingfisher/releases/assets/616898287"
+checksum = "sha256:da7508a90ff36337b41d12e63814cca3ac5586abdcf8c194898059c1ed5e1f81"
+url = "https://github.com/mongodb/kingfisher/releases/download/v2.11.1/kingfisher-linux-arm64.tgz"
+url_api = "https://api.github.com/repos/mongodb/kingfisher/releases/assets/620356541"
 provenance = "github-attestations"
 
 [tools."github:mongodb/kingfisher"."platforms.linux-arm64-musl"]
-checksum = "sha256:4fef19da45e05480fe8e89ff990d280b7f75296d2f2ca32acafdeb18839fe56c"
-url = "https://github.com/mongodb/kingfisher/releases/download/v2.11.0/kingfisher-linux-arm64.tgz"
-url_api = "https://api.github.com/repos/mongodb/kingfisher/releases/assets/616898287"
+checksum = "sha256:da7508a90ff36337b41d12e63814cca3ac5586abdcf8c194898059c1ed5e1f81"
+url = "https://github.com/mongodb/kingfisher/releases/download/v2.11.1/kingfisher-linux-arm64.tgz"
+url_api = "https://api.github.com/repos/mongodb/kingfisher/releases/assets/620356541"
 provenance = "github-attestations"
 
 [tools."github:mongodb/kingfisher"."platforms.linux-x64"]
-checksum = "sha256:2d880b1d1c3410073cf7b305ea22350e78cf3c8644e6048f53f5271a56444ce7"
-url = "https://github.com/mongodb/kingfisher/releases/download/v2.11.0/kingfisher-linux-x64.tgz"
-url_api = "https://api.github.com/repos/mongodb/kingfisher/releases/assets/616898117"
+checksum = "sha256:84e4a4c45814f05e80aa8eee768e5170d758736fa116ffaf03565da4d5a77447"
+url = "https://github.com/mongodb/kingfisher/releases/download/v2.11.1/kingfisher-linux-x64.tgz"
+url_api = "https://api.github.com/repos/mongodb/kingfisher/releases/assets/620356385"
 provenance = "github-attestations"
 
 [tools."github:mongodb/kingfisher"."platforms.linux-x64-musl"]
-checksum = "sha256:2d880b1d1c3410073cf7b305ea22350e78cf3c8644e6048f53f5271a56444ce7"
-url = "https://github.com/mongodb/kingfisher/releases/download/v2.11.0/kingfisher-linux-x64.tgz"
-url_api = "https://api.github.com/repos/mongodb/kingfisher/releases/assets/616898117"
+checksum = "sha256:84e4a4c45814f05e80aa8eee768e5170d758736fa116ffaf03565da4d5a77447"
+url = "https://github.com/mongodb/kingfisher/releases/download/v2.11.1/kingfisher-linux-x64.tgz"
+url_api = "https://api.github.com/repos/mongodb/kingfisher/releases/assets/620356385"
 provenance = "github-attestations"
 
 [tools."github:mongodb/kingfisher"."platforms.macos-arm64"]
-checksum = "sha256:4daf65c8cae6c4b14e31a3fd94a9469a6fc77f7bcf2c201ad83e3d8f3e869aaf"
-url = "https://github.com/mongodb/kingfisher/releases/download/v2.11.0/kingfisher-darwin-arm64.tgz"
-url_api = "https://api.github.com/repos/mongodb/kingfisher/releases/assets/616898502"
+checksum = "sha256:131de009409be38ae595550acfa8811ff3d43912715687758ff6a84157f1ef5e"
+url = "https://github.com/mongodb/kingfisher/releases/download/v2.11.1/kingfisher-darwin-arm64.tgz"
+url_api = "https://api.github.com/repos/mongodb/kingfisher/releases/assets/620356689"
 provenance = "github-attestations"
 
 [tools."github:mongodb/kingfisher"."platforms.macos-x64"]
-checksum = "sha256:1dfcb35684fff1b0e042617a684f810d7c93d8c70385a0e6091c41c591d210e6"
-url = "https://github.com/mongodb/kingfisher/releases/download/v2.11.0/kingfisher-darwin-x64.tgz"
-url_api = "https://api.github.com/repos/mongodb/kingfisher/releases/assets/616898453"
+checksum = "sha256:e91b74c447b759fc72f993373b80ce7a6122a275f5793df61928b9c3c4eac1e3"
+url = "https://github.com/mongodb/kingfisher/releases/download/v2.11.1/kingfisher-darwin-x64.tgz"
+url_api = "https://api.github.com/repos/mongodb/kingfisher/releases/assets/620356662"
 provenance = "github-attestations"
 
 [tools."github:mongodb/kingfisher"."platforms.windows-x64"]
-checksum = "sha256:e52bd9238b1862de90dec1d362e755cdc2ffe6db223b55f0604fd5215209e192"
-url = "https://github.com/mongodb/kingfisher/releases/download/v2.11.0/kingfisher-windows-x64.zip"
-url_api = "https://api.github.com/repos/mongodb/kingfisher/releases/assets/616897984"
+checksum = "sha256:6b41da5b091f131948d85568aae7da594af0b95c19599f9deb7a08d1f76b823c"
+url = "https://github.com/mongodb/kingfisher/releases/download/v2.11.1/kingfisher-windows-x64.zip"
+url_api = "https://api.github.com/repos/mongodb/kingfisher/releases/assets/620356260"
 provenance = "github-attestations"
 
 [[tools."github:zizmorcore/zizmor"]]
