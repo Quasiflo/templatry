@@ -351,44 +351,44 @@ url_api = "https://api.github.com/repos/tombi-toml/tombi/releases/assets/6337260
 provenance = "github-attestations"
 
 [[tools."github:Infisical/cli"]]
-version = "0.43.143"
+version = "0.43.145"
 backend = "github:Infisical/cli"
-specifiers = ["v0.43.143"]
+specifiers = ["v0.43.145"]
 
 [tools."github:Infisical/cli"."platforms.linux-arm64"]
-checksum = "sha256:8ca1953aa8dbe8256c3896b07de65b4ffd388be556843109637c28c822378018"
-url = "https://github.com/Infisical/cli/releases/download/v0.43.143/cli_0.43.143_linux_arm64.tar.gz"
-url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/635342854"
+checksum = "sha256:aa0601275e2586ac938a80456ac56480839ab3346dfcafd8ee9fdda64a31c0a7"
+url = "https://github.com/Infisical/cli/releases/download/v0.43.145/cli_0.43.145_linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/638337998"
 
 [tools."github:Infisical/cli"."platforms.linux-arm64-musl"]
-checksum = "sha256:8ca1953aa8dbe8256c3896b07de65b4ffd388be556843109637c28c822378018"
-url = "https://github.com/Infisical/cli/releases/download/v0.43.143/cli_0.43.143_linux_arm64.tar.gz"
-url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/635342854"
+checksum = "sha256:aa0601275e2586ac938a80456ac56480839ab3346dfcafd8ee9fdda64a31c0a7"
+url = "https://github.com/Infisical/cli/releases/download/v0.43.145/cli_0.43.145_linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/638337998"
 
 [tools."github:Infisical/cli"."platforms.linux-x64"]
-checksum = "sha256:ce02c84be4164d8386c7534f93ce5b5467cf48b31b15e35e372f9979f3086308"
-url = "https://github.com/Infisical/cli/releases/download/v0.43.143/cli_0.43.143_linux_amd64.tar.gz"
-url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/635342857"
+checksum = "sha256:4ef0d2ed375decb8fe9ca7cd5a418c140b8ea39f77d3a746af4a2fcf64bf91cb"
+url = "https://github.com/Infisical/cli/releases/download/v0.43.145/cli_0.43.145_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/638338002"
 
 [tools."github:Infisical/cli"."platforms.linux-x64-musl"]
-checksum = "sha256:ce02c84be4164d8386c7534f93ce5b5467cf48b31b15e35e372f9979f3086308"
-url = "https://github.com/Infisical/cli/releases/download/v0.43.143/cli_0.43.143_linux_amd64.tar.gz"
-url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/635342857"
+checksum = "sha256:4ef0d2ed375decb8fe9ca7cd5a418c140b8ea39f77d3a746af4a2fcf64bf91cb"
+url = "https://github.com/Infisical/cli/releases/download/v0.43.145/cli_0.43.145_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/638338002"
 
 [tools."github:Infisical/cli"."platforms.macos-arm64"]
-checksum = "sha256:e5d668dd03a49c601f82e3665979a59ba9001224c2bb92f5ca7e53c822e2be83"
-url = "https://github.com/Infisical/cli/releases/download/v0.43.143/cli_0.43.143_darwin_arm64.tar.gz"
-url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/635336875"
+checksum = "sha256:ba5bc909aa6ec28f5780da58051ea80317f88bcc28ea0a8d5dedbc8cb1b28773"
+url = "https://github.com/Infisical/cli/releases/download/v0.43.145/cli_0.43.145_darwin_arm64.tar.gz"
+url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/638329987"
 
 [tools."github:Infisical/cli"."platforms.macos-x64"]
-checksum = "sha256:7e0270e3423771a6e77f4fc8b7061c5f0c0ba4c6e4b33867e52cc27f69e3d76b"
-url = "https://github.com/Infisical/cli/releases/download/v0.43.143/cli_0.43.143_darwin_amd64.tar.gz"
-url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/635336880"
+checksum = "sha256:8abb218d34d37ba67afcdb9cb8104be848da83707e63f58536f054db636bb426"
+url = "https://github.com/Infisical/cli/releases/download/v0.43.145/cli_0.43.145_darwin_amd64.tar.gz"
+url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/638329990"
 
 [tools."github:Infisical/cli"."platforms.windows-x64"]
-checksum = "sha256:db1114f7606dfc0785f79bb9d64f5c06b4d7ee7394e8bdba2e3dbe8d8057aefa"
-url = "https://github.com/Infisical/cli/releases/download/v0.43.143/cli_0.43.143_windows_amd64.zip"
-url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/635342866"
+checksum = "sha256:60e05fdb5025708300c83cfe5924d2c4adbc3f391c2c3d2f566303447973199d"
+url = "https://github.com/Infisical/cli/releases/download/v0.43.145/cli_0.43.145_windows_amd64.zip"
+url_api = "https://api.github.com/repos/Infisical/cli/releases/assets/638338018"
 
 [[tools."github:indygreg/apple-platform-rs"]]
 version = "0.29.0"
