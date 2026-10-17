@@ -42,7 +42,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 watchexec = "8"
 watchexec-signals = "5"
 yaml_serde = "0.10"
-zip = { version = "8", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 [profile.release]
 strip = true
