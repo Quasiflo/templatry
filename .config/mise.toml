@@ -4,7 +4,7 @@
 #* Main
 "core:rust" = "1.99.1"
 "packslip:github.com/jdx/fnox" = "1.36.0"                                                        # Used for env vars & secrets
-"aqua:cli/cli" = "2.102.0"                                                                       # Used for uploading build artifacts on release
+"aqua:cli/cli" = "2.102.1"                                                                       # Used for uploading build artifacts on release
 "aqua:go-task/task" = "3.54.0"                                                                   # Used for running tasks in IDE and CI
 "github:Infisical/cli" = "v0.44.3"                                                              # Backend to retrieve secrets for fnox from
 "github:indygreg/apple-platform-rs" = { version = "0.29.0", version_prefix = "apple-codesign/" } # Used to validate notarisation succeeded from linux runner
@@ -16,7 +16,7 @@
 "aqua:rvben/rumdl" = "0.3.0"              # Used for linting & formatting markdown
 "aqua:loeffel-io/ls-lint" = "2.3.2"        # Used for enforcing folder & file naming conventions
 "aqua:lycheeverse/lychee" = "0.24.2"       # Used for checking for dead links
-"github:kucherenko/jscpd" = "v5.4.1"       # Used for detecting code duplication
+"github:kucherenko/jscpd" = "v5.4.2"       # Used for detecting code duplication
 "github:zizmorcore/zizmor" = "v1.31.1"     # Used for statically analyzing github actions
 "github:mongodb/kingfisher" = "v2.14.0"     # Used for checking for leaked credentials & secrets
 
