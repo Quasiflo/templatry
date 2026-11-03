@@ -6,7 +6,7 @@
 "packslip:github.com/jdx/fnox" = "1.36.0"                                                        # Used for env vars & secrets
 "aqua:cli/cli" = "2.103.3"                                                                       # Used for uploading build artifacts on release
 "aqua:go-task/task" = "3.54.0"                                                                   # Used for running tasks in IDE and CI
-"github:Infisical/cli" = "v0.44.10"                                                              # Backend to retrieve secrets for fnox from
+"github:Infisical/cli" = "v0.44.11"                                                              # Backend to retrieve secrets for fnox from
 "github:indygreg/apple-platform-rs" = { version = "0.29.0", version_prefix = "apple-codesign/" } # Used to validate notarisation succeeded from linux runner
 #* Linting
 "packslip:github.com/jdx/hk" = "2.4.0"     # Used for running linting, formatting & git hooks
@@ -18,7 +18,7 @@
 "aqua:lycheeverse/lychee" = "0.24.2"       # Used for checking for dead links
 "github:kucherenko/jscpd" = "v5.4.2"       # Used for detecting code duplication
 "github:zizmorcore/zizmor" = "v1.31.1"     # Used for statically analyzing github actions
-"github:mongodb/kingfisher" = "v2.15.0"     # Used for checking for leaked credentials & secrets
+"github:mongodb/kingfisher" = "v2.16.0"     # Used for checking for leaked credentials & secrets
 
 [settings]
 lockfile = true
