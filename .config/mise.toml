@@ -2,7 +2,7 @@
 
 [tools]
 #* Main
-"core:rust" = "1.99.1"
+"core:rust" = "1.100.0"
 "packslip:github.com/jdx/fnox" = "1.36.0"                                                        # Used for env vars & secrets
 "aqua:cli/cli" = "2.103.3"                                                                       # Used for uploading build artifacts on release
 "aqua:go-task/task" = "3.54.0"                                                                   # Used for running tasks in IDE and CI
