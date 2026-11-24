@@ -632,6 +632,7 @@ repository_ids = { repository = "1078762196" }
 version = "2.4.0"
 backend = "packslip:github.com/jdx/hk"
 specifiers = ["2.4.0"]
+unsupported_platforms = ["macos-x64"]
 
 [tools."packslip:github.com/jdx/hk"."platforms.linux-arm64"]
 checksum = "sha256:836235bd8aa06f25e7ff28591b32efb5297abe55366e912095636a49ffe4d363"
